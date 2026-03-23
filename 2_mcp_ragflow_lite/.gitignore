@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Temp
+/tmp/
+*.tmp
+
+# Gemini agent artifacts
+.gemini/
+.agents/
+
+# Data & Models
+/data/
+*.onnx
+
+# Runtime generated
+conf/folders.json
+
+# Test artifacts
+test_doc.pdf
+dummy_*.txt
+traceback_*.txt
+chunks.txt

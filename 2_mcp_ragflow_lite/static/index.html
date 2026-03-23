@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAGFlow Lite — 智能知识检索</title>
+    <meta name="description" content="轻量级 RAG + GraphRAG + CRAG 智能知识检索系统">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="container">
+    <!-- Header -->
+    <div class="header">
+        <div>
+            <h1>⚡ RAGFlow Lite</h1>
+            <div class="subtitle">混合检索 + GraphRAG + CRAG 纠错增强</div>
+        </div>
+        <div class="status-badge" id="statusBadge">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">连接中...</span>
+        </div>
+    </div>
+
+    <!-- Main Grid -->
+    <div class="main-grid">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <!-- Knowledge Base -->
+            <div class="card" id="kbCard">
+                <div class="card-title"><span class="icon">📚</span> 知识库管理
+                    <button class="kb-batch-toggle" id="kbBatchToggle" onclick="toggleBatchMode()" style="display:none">🗑️ 批量管理</button>
+                </div>
+                <div class="input-group">
+                    <input type="text" id="kbNameInput" placeholder="输入知识库名称...">
+                    <button class="btn btn-primary" onclick="createKB()">创建</button>
+                </div>
+                <div style="margin-bottom:8px">
+                    <select id="folderFilter" onchange="loadKBs()" style="padding:6px 10px;font-size:12px">
+                        <option value="">📁 全部文件夹</option>
+                    </select>
+                </div>
+                <div class="kb-toolbar" id="kbToolbar" style="display:none">
+                    <label class="kb-select-all">
+                        <input type="checkbox" id="kbSelectAll" onchange="toggleKBSelectAll()">
+                        <span id="kbSelectAllLabel">全选</span>
+                    </label>
+                    <button class="kb-batch-delete" id="kbBatchDeleteBtn" onclick="batchDeleteKBs()">
+                        🗑️ 批量删除 (<span id="kbSelectedCount">0</span>)
+                    </button>
+                </div>
+                <ul class="kb-list" id="kbList">
+                    <li class="empty-state" style="padding:20px"><span style="color:var(--text-muted)">暂无知识库</span></li>
+                </ul>
+            </div>
+
+            <!-- Upload -->
+            <div class="card">
+                <div class="card-title"><span class="icon">📄</span> 文档上传</div>
+                <div class="upload-zone" id="uploadZone">
+                    <div class="icon">📁</div>
+                    <div class="text">点击或拖拽文件到此处</div>
+                    <div class="hint">支持 TXT / MD / PDF / DOCX / XLSX / HTML / JSON / PPTX</div>
+                    <input type="file" id="fileInput" accept=".txt,.md,.pdf,.docx,.xlsx,.html,.json,.pptx,.csv" multiple>
+                </div>
+                <div class="progress-bar" id="uploadProgress">
+                    <div class="fill" id="uploadFill" style="width:0%"></div>
+                </div>
+                <div id="uploadStatus" style="margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
+            </div>
+
+            <!-- Performance Dashboard -->
+            <div class="card" style="padding:16px" id="perfCard">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                    <span style="font-size:13px;font-weight:600;color:var(--text-secondary)">⚡ 性能监控</span>
+                    <button class="history-clear" onclick="resetPerfStats()">重置</button>
+                </div>
+                <div id="perfStats" style="font-size:12px;color:var(--text-muted);line-height:1.8">
+                    <div style="text-align:center;color:var(--text-muted);padding:8px">暂无数据，执行一次检索后显示</div>
+                </div>
+            </div>
+
+            <!-- System Info -->
+            <div class="card" style="padding:16px">
+                <div style="font-size:12px;color:var(--text-muted);line-height:1.8">
+                    <div>📊 <b>Embedding:</b> BGE-M3 (1024d)</div>
+                    <div>🏆 <b>Reranker:</b> BGE-Reranker-v2-m3</div>
+                    <div>🔗 <b>Graph:</b> NetworkX + PageRank</div>
+                    <div>🧠 <b>CRAG:</b> 三态动态路由</div>
+                </div>
+            </div>
+
+            <!-- Agent Tool API -->
+            <div class="card" style="padding:16px">
+                <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:10px">🤖 Agent Tool API</div>
+                <div style="font-size:12px;color:var(--text-muted);line-height:1.8">
+                    <div><b>Schema:</b> <a href="/api/tool/schema" target="_blank" style="color:var(--accent)">/api/tool/schema</a></div>
+                    <div><b>List KBs:</b> <a href="/api/tool/list_kbs" target="_blank" style="color:var(--accent)">/api/tool/list_kbs</a></div>
+                    <div><b>Retrieve:</b> POST /api/tool/retrieve</div>
+                    <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">
+                        支持 fast / hybrid / deep 三种检索模式<br>返回 OpenAI Function Calling 兼容 Schema
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div>
+            <div class="card">
+                <div class="card-title">
+                    <span><span class="icon">🔍</span> 智能检索</span>
+                    <div class="options-row">
+                        <div class="toggle-option active" id="toggleGraph" onclick="toggleOpt(this)">
+                            <span class="dot"></span> GraphRAG
+                        </div>
+                        <div class="toggle-option active" id="toggleCRAG" onclick="toggleOpt(this)">
+                            <span class="dot"></span> CRAG
+                        </div>
+                        <div class="toggle-option active" id="toggleReranker" onclick="toggleOpt(this)">
+                            <span class="dot"></span> Reranker
+                        </div>
+                        <div class="toggle-option" id="toggleWebSearch" onclick="toggleOpt(this)">
+                            <span class="dot"></span> 🌐网络检索
+                        </div>
+                        <div class="toggle-option" id="toggleParams" onclick="toggleParamPanel()">
+                            <span class="dot"></span> ⚙️
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Multi-KB Selector -->
+                <div class="kb-selector collapsed" id="kbSelector">
+                    <div class="kb-selector-header" onclick="toggleKBSelector()">
+                        <span class="kb-selector-label">📚 检索范围 <span class="kb-selected-summary" id="kbSelectedSummary"></span></span>
+                        <div class="kb-selector-right">
+                            <div class="kb-selector-actions" id="kbSelectorActions">
+                                <button class="kb-select-all-btn" id="searchKBSelectAll" onclick="event.stopPropagation();toggleSearchKBAll()">全选</button>
+                                <button class="kb-select-all-btn" id="searchKBClearAll" onclick="event.stopPropagation();clearSearchKBAll()" style="display:none">清空</button>
+                            </div>
+                            <span class="kb-selector-arrow">▾</span>
+                        </div>
+                    </div>
+                    <div class="kb-selector-body" id="kbSelectorBody">
+                        <div class="kb-chips" id="searchKBChips">
+                            <span class="kb-chip-empty">请先创建知识库</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Search Box -->
+                <div class="search-box">
+                    <input type="text" id="searchInput" placeholder="输入你的问题..." onkeydown="if(event.key==='Enter')doSearch()">
+                    <button class="btn btn-primary" id="searchBtn" onclick="doSearch()">
+                        🔍 检索
+                    </button>
+                </div>
+
+                <!-- Parameter Panel -->
+                <div class="param-panel" id="paramPanel">
+                    <div class="param-header">
+                        <span>⚙️ 检索参数调节</span>
+                        <button class="history-clear" onclick="resetParams()">重置默认</button>
+                    </div>
+                    <div class="param-row">
+                        <label>Top K 返回数</label>
+                        <input type="range" id="paramTopK" min="1" max="20" value="5" oninput="updateParam('topK',this.value)">
+                        <span class="param-val" id="valTopK">5</span>
+                    </div>
+                    <div class="param-row">
+                        <label>相似度阈值</label>
+                        <input type="range" id="paramThreshold" min="0" max="100" value="20" oninput="updateParam('threshold',this.value)">
+                        <span class="param-val" id="valThreshold">0.20</span>
+                    </div>
+                    <div class="param-row">
+                        <label>向量权重</label>
+                        <input type="range" id="paramVecWeight" min="0" max="100" value="30" oninput="updateParam('vecWeight',this.value)">
+                        <span class="param-val" id="valVecWeight">0.30</span>
+                    </div>
+                </div>
+
+                <!-- Search History -->
+                <div class="history-panel" id="historyPanel" style="display:none">
+                    <div class="history-header">
+                        <span>🕐 搜索历史</span>
+                        <button class="history-clear" onclick="clearHistory()">清空</button>
+                    </div>
+                    <div class="history-tags" id="historyTags"></div>
+                </div>
+
+                <!-- CRAG Bar -->
+                <div class="crag-bar" id="cragBar">
+                    <div class="crag-main">
+                        <span class="label" id="cragLabel"></span>
+                        <span class="info" id="cragInfo"></span>
+                        <span class="latency" id="cragLatency"></span>
+                    </div>
+                    <div class="crag-action" id="cragAction"></div>
+                </div>
+
+                <!-- Results -->
+                <div class="results-area" id="resultsArea">
+                    <div class="empty-state">
+                        <div class="icon">🧠</div>
+                        <div>选择知识库，输入问题开始检索</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Chunk Browser Modal — Two-panel layout -->
+<div class="modal-overlay" id="chunkModal" onclick="if(event.target===this)closeChunkModal()">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>📦 <span id="chunkModalTitle">分块浏览</span>
+                <span class="header-meta" id="chunkModalMeta"></span>
+            </h2>
+            <button class="close-btn" onclick="closeChunkModal()">✕</button>
+        </div>
+        <div class="modal-content">
+            <!-- Left: Document sidebar -->
+            <div class="doc-sidebar">
+                <div class="doc-sidebar-header">
+                    <span class="title">📁 文档列表</span>
+                    <button class="select-all-btn" id="selectAllBtn" onclick="toggleSelectAll()">全选</button>
+                </div>
+                <div class="doc-list" id="docList">
+                    <div class="empty-state" style="padding:30px;font-size:13px">加载中...</div>
+                </div>
+            </div>
+            <!-- Right: Chunks -->
+            <div class="chunk-panel">
+                <div class="chunk-panel-body" id="chunkPanelBody">
+                    <div class="empty-state"><div class="icon">📦</div><div>加载中...</div></div>
+                </div>
+                <div class="pagination" id="chunkPagination"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Chunk Detail Overlay -->
+<div class="chunk-detail-overlay" id="chunkDetailOverlay" onclick="if(event.target===this)closeChunkDetail()">
+    <div class="chunk-detail">
+        <div class="modal-header">
+            <h2>📄 <span id="chunkDetailTitle">分块详情</span></h2>
+            <button class="close-btn" onclick="closeChunkDetail()">✕</button>
+        </div>
+        <div class="chunk-detail-body" id="chunkDetailBody"></div>
+    </div>
+</div>
+
+<!-- Custom Confirm Dialog -->
+<div class="confirm-overlay" id="confirmOverlay">
+    <div class="confirm-box">
+        <div class="confirm-icon">⚠️</div>
+        <div class="confirm-title">删除文档</div>
+        <div class="confirm-msg" id="confirmMsg"></div>
+        <div class="confirm-actions">
+            <button class="confirm-cancel" onclick="closeConfirm()">取消</button>
+            <button class="confirm-delete" id="confirmDeleteBtn">🗑️ 确认删除</button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+
+<script src="js/app.js"></script>
+</body>
+</html>
