@@ -72,7 +72,9 @@ def test_task_tool_returns_error_for_unknown_subagent(monkeypatch):
         tool_call_id="tc-1",
     )
 
-    assert result.startswith("Error: Unknown subagent type")
+    assert "Error: Unknown subagent type" in result
+    assert "imaging" in result
+    assert "research" in result
 
 
 def test_task_tool_emits_running_and_completed_events(monkeypatch):
