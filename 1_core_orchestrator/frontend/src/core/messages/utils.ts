@@ -139,36 +139,18 @@ export function extractTextFromMessage(message: Message) {
 }
 
 const THINK_TAG_RE = /<think>\s*([\s\S]*?)\s*<\/think>/g;
-// Matches an unclosed <think> tag (streaming in progress)
-const THINK_TAG_OPEN_RE = /<think>\s*([\s\S]*)$/;
 
 function splitInlineReasoning(content: string) {
   const reasoningParts: string[] = [];
-  // First, extract all completed <think>...</think> pairs
-  let cleaned = content
+  const cleaned = content
     .replace(THINK_TAG_RE, (_, reasoning: string) => {
       const normalized = reasoning.trim();
       if (normalized) {
         reasoningParts.push(normalized);
       }
       return "";
-    });
-
-  // Then, handle an unclosed <think> tag (streaming case)
-  const openMatch = cleaned.match(THINK_TAG_OPEN_RE);
-  if (openMatch) {
-    const streamingReasoning = (openMatch[1] ?? "").trim();
-    if (streamingReasoning) {
-      reasoningParts.push(streamingReasoning);
-    } else {
-      // Even if empty (just received <think>), mark as having reasoning
-      // so the thinking UI appears immediately
-      reasoningParts.push("");
-    }
-    cleaned = cleaned.slice(0, openMatch.index ?? 0).trim();
-  } else {
-    cleaned = cleaned.trim();
-  }
+    })
+    .trim();
 
   return {
     content: cleaned,

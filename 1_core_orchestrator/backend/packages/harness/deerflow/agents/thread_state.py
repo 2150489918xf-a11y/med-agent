@@ -1,4 +1,3 @@
-import operator
 from typing import Annotated, NotRequired, TypedDict
 
 from langchain.agents import AgentState
@@ -46,15 +45,6 @@ def merge_viewed_images(existing: dict[str, ViewedImageData] | None, new: dict[s
     return {**existing, **new}
 
 
-def merge_dict(existing: dict | None, new: dict | None) -> dict:
-    """Reducer for dict - merges and overwrites keys."""
-    if existing is None:
-        return new or {}
-    if new is None:
-        return existing
-    return {**existing, **new}
-
-
 class ThreadState(AgentState):
     sandbox: NotRequired[SandboxState | None]
     thread_data: NotRequired[ThreadDataState | None]
@@ -63,9 +53,3 @@ class ThreadState(AgentState):
     todos: NotRequired[list | None]
     uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]  # image_path -> {base64, mime_type}
-    
-    # --- 医疗扩展字段 (从 ContextBus 迁移) ---
-    patient_profile: NotRequired[dict | None]
-    lab_data: Annotated[list[dict], operator.add]
-    diagnosis_result: Annotated[dict, merge_dict]
-    qc_feedback: NotRequired[list[str] | None]
