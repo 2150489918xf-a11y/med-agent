@@ -3,6 +3,8 @@
 This document is for coding agents taking over work inside `1_core_orchestrator/`.
 
 > **⚠️ This project has been adapted from generic DeerFlow 2.0 to a medical multi-agent system (MedAgent).**
+>
+> **快速启动项目？** → 参考 `QUICK_START.md`
 
 ## 1. First Reality Checks
 
@@ -15,12 +17,12 @@ This document is for coding agents taking over work inside `1_core_orchestrator/
 
 The system uses a **three-agent + one-auxiliary architecture**:
 
-| Agent | Role | Model | Config File |
-| ----- | ---- | ----- | ----------- |
-| **主Agent (Lead Agent)** | 调度子Agent，识别化验单，网络搜索 | `Qwen/Qwen3.5-397B-A17B` | `agents/lead_agent/prompt.py` |
-| **影像Agent (Imaging Agent)** | 接收文件路径，调MCP服务分析医疗影像 | `Qwen/Qwen3-VL-235B-A22B-Thinking` | `subagents/builtins/imaging_agent.py` |
-| **医疗知识Agent** | 深度医疗知识检索 | 继承主Agent模型 | `subagents/builtins/medical_knowledge_agent.py` |
-| **辅助模型** | 标题生成等低成本任务 | `Qwen/Qwen3-8B` | `config.yaml` title section |
+| Agent | Role | Model | 模型来源 |
+| ----- | ---- | ----- | -------- |
+| **主Agent (Lead Agent)** | 调度子Agent，识别化验单，网络搜索 | `Qwen/Qwen3.5-397B-A17B` | `config.yaml` models[0] |
+| **影像Agent (Imaging Agent)** | 接收文件路径，调MCP服务分析医疗影像 | `Qwen/Qwen3-VL-235B-A22B-Thinking` | `config.yaml` subagents.agents.imaging-agent.model_name |
+| **医疗知识Agent** | 深度医疗知识检索 | 继承主Agent模型 | `model: "inherit"` |
+| **辅助模型** | 标题生成等低成本任务 | `Qwen/Qwen3-8B` | `config.yaml` title.model_name |
 
 子Agent通过 `task` 工具调度，需要 **Ultra模式** (`subagent_enabled: true`)。
 
@@ -97,17 +99,21 @@ Nginx routing shape:
 
 - `backend/langgraph.json` — registers `lead_agent` as `deerflow.agents:make_lead_agent`
 - `backend/config.yaml` — **运行时配置**（模型、summarization、memory、subagents、title等）
-- `backend/.env` — **环境变量**（API Key、LangSmith追踪配置）
+  - API Key 使用 `$ENV_VAR` 引用，运行时从 `.env` 读取，**不硬编码明文**
+- `backend/.env` — **环境变量**（API Key、LangSmith追踪配置，**不在git中**）
 - `backend/app/gateway/app.py` — FastAPI gateway entrypoint
+- `backend/app/gateway/routers/models.py` — **模型管理CRUD接口**（GET/POST/PUT/DELETE）
 - `backend/packages/harness/deerflow/agents/lead_agent/agent.py` — lead-agent runtime assembly
 - `backend/packages/harness/deerflow/agents/lead_agent/prompt.py` — **医疗系统提示词**（含图片处理协议）
 - `backend/packages/harness/deerflow/subagents/builtins/` — 影像Agent和医疗知识Agent配置
+- `backend/packages/harness/deerflow/config/subagents_config.py` — 子Agent配置覆盖（含 `model_name`）
 - `backend/packages/harness/deerflow/tools/builtins/task_tool.py` — 子Agent调度工具
 
 ### Frontend
 
 - `frontend/src/app/workspace/chats/[thread_id]/page.tsx` — chat page
 - `frontend/src/core/threads/hooks.ts` — thread creation, streaming, uploads
+- `frontend/src/core/models/` — **模型数据层**（types.ts / api.ts / hooks.ts）
 - `frontend/src/core/api/api-client.ts` — LangGraph SDK client singleton
 - `frontend/src/core/config/index.ts` — backend/LangGraph URL resolution
 
@@ -127,6 +133,7 @@ Current medical settings:
 ```yaml
 models:
   - name: qwen3.5-397b          # 主Agent, supports_thinking: true
+    api_key: $SILICONFLOW_API_KEY  # 从 .env 读取
   - name: qwen3-vl-235b         # 影像Agent, supports_vision: true
   - name: qwen3-8b              # 辅助模型 (标题生成等)
 
@@ -144,9 +151,26 @@ memory:
 subagents:
   timeout_seconds: 900
   agents:
-    imaging-agent: { timeout_seconds: 1800 }
-    medical-knowledge-agent: { timeout_seconds: 900 }
+    imaging-agent:
+      timeout_seconds: 1800
+      model_name: qwen3-vl-235b   # 影像Agent使用VL视觉模型
+    medical-knowledge-agent:
+      timeout_seconds: 900
+      # model_name 未指定，继承主Agent模型
 ```
+
+### Gateway Model Management API
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| GET | `/api/models` | 列表（脱敏，不返回api_key明文） |
+| GET | `/api/models/{name}` | 单个模型详情 |
+| POST | `/api/models` | 新增模型提供商 |
+| PUT | `/api/models/{name}` | 修改（api_key留空不覆盖） |
+| DELETE | `/api/models/{name}` | 删除（默认模型+引用保护） |
+
+使用 `ruamel.yaml` Round-Trip 模式读写 `config.yaml`，100%保留注释和格式。
+修改后 `get_app_config()` 通过 `st_mtime` 自动热重载，无需重启。
 
 > **Ultra模式前提**: 模型必须设 `supports_thinking: true`，且 `subagents` 配置已启用。否则前端会强制锁定为Flash模式。
 
@@ -164,9 +188,9 @@ Task tool `subagent_type` accepts: `"imaging-agent"` | `"medical-knowledge-agent
 Important facts:
 
 - `MAX_CONCURRENT_SUBAGENTS` is `3`
-- 影像Agent使用 `qwen3-vl-235b` (VL视觉模型，`[P3-NOTE]` 标记为未来视觉兜底预留)
+- 影像Agent模型从 `config.yaml` `subagents.agents.imaging-agent.model_name` 读取，代码中不再硬编码
 - 影像Agent当前为**纯文本管道**：接收路径 → 调MCP → 返回结构化报告
-- 医疗知识Agent inherits parent model
+- 医疗知识Agent inherits parent model (`model: "inherit"`)
 - MCP imaging service is currently a **stub interface** — to be connected later
 
 ## 8. Skills
