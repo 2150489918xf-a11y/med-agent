@@ -4,7 +4,21 @@ This agent is responsible for medical image analysis via MCP services.
 Currently provides a stub interface for future ML tool integration.
 """
 
+from deerflow.config.subagents_config import get_subagents_app_config
 from deerflow.subagents.config import SubagentConfig
+
+# 默认VL模型，config.yaml 中未配置时使用此值
+_DEFAULT_IMAGING_MODEL = "qwen3-vl-235b"
+
+
+def _resolve_imaging_model() -> str:
+    """从 config.yaml 读取影像Agent的模型配置，未配置时回退到默认VL模型。
+    
+    注意：此函数在运行时调用（非 import 时），确保 config.yaml 已被加载。
+    """
+    config_model = get_subagents_app_config().get_model_for("imaging-agent")
+    return config_model if config_model else _DEFAULT_IMAGING_MODEL
+
 
 IMAGING_AGENT_CONFIG = SubagentConfig(
     name="imaging-agent",
@@ -70,6 +84,7 @@ IMAGING_AGENT_CONFIG = SubagentConfig(
 """,
     tools=None,  # 继承工具列表，MCP服务连接后可通过MCP工具调用外部分析服务
     disallowed_tools=["task", "ask_clarification"],
-    model="qwen3-vl-235b",  # [P3-NOTE] 保留VL模型配置，未来可作为MCP不可用时的视觉兜底
+    model=_resolve_imaging_model(),  # [P3-NOTE] 从config.yaml读取，默认VL模型，未来可作为MCP不可用时的视觉兜底
     max_turns=30,
 )
+
