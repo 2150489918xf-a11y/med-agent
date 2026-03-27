@@ -59,6 +59,12 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                 size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.1f} MB"
                 lines.append(f"- {file['filename']} ({size_str})")
                 lines.append(f"  Path: {file['path']}")
+                if file.get("image_type"):
+                    lines.append(f"  图片类型: {file['image_type']}")
+                if file.get("enhanced_path"):
+                    lines.append(f"  增强版路径: {file['enhanced_path']}")
+                if file.get("ocr_text"):
+                    lines.append(f"\n{file['ocr_text']}")
                 lines.append("")
         else:
             lines.append("(empty)")
@@ -73,7 +79,8 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                 lines.append(f"  Path: {file['path']}")
                 lines.append("")
 
-        lines.append("You can read these files using the `read_file` tool with the paths shown above.")
+        lines.append("You can read text/markdown files using the `read_file` tool with the paths shown above.")
+        lines.append("⚠️ IMPORTANT: DO NOT use the `read_file` tool on image files (PNG, JPG, etc.). They are binary files and will cause errors. Read the extracted `图片类型` and OCR text provided above instead.")
         lines.append("</uploaded_files>")
 
         return "\n".join(lines)
@@ -157,7 +164,11 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         historical_files: list[dict] = []
         if uploads_dir and uploads_dir.exists():
             for file_path in sorted(uploads_dir.iterdir()):
-                if file_path.is_file() and file_path.name not in new_filenames:
+                if (
+                    file_path.is_file()
+                    and file_path.name not in new_filenames
+                    and not file_path.name.endswith(".ocr.md")
+                ):
                     stat = file_path.stat()
                     historical_files.append(
                         {
@@ -167,6 +178,26 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                             "extension": file_path.suffix,
                         }
                     )
+
+        # P2: 扫描 sidecar 文件，注入分类标签和 OCR 结果
+        if uploads_dir and uploads_dir.exists():
+            import json
+            all_files = (new_files or []) + historical_files
+            for f in all_files:
+                # 优先读取 meta.json 获取视觉网关的稳定分类结果
+                meta_file = uploads_dir / f"{f['filename']}.meta.json"
+                if meta_file.exists():
+                    try:
+                        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                        if "image_type" in meta:
+                            f["image_type"] = meta["image_type"]
+                    except Exception as e:
+                        logger.warning(f"Failed to read meta sidecar for {f['filename']}: {e}")
+
+                sidecar = uploads_dir / f"{f['filename']}.ocr.md"
+                if sidecar.exists():
+                    f["ocr_text"] = sidecar.read_text(encoding="utf-8")
+                    f["image_type"] = "lab_report"
 
         if not new_files and not historical_files:
             return None
