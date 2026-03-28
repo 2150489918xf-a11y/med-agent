@@ -9,6 +9,7 @@ from app.gateway.routers import (
     agents,
     artifacts,
     channels,
+    imaging_reports,
     mcp,
     memory,
     models,
@@ -182,6 +183,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Uploads API is mounted at /api/threads/{thread_id}/uploads
     app.include_router(uploads.router)
+
+    # Imaging reports API is mounted at /api/threads/{thread_id}/imaging-reports
+    app.include_router(imaging_reports.router)
 
     # Thread cleanup API is mounted at /api/threads/{thread_id}
     app.include_router(threads.router)

@@ -79,7 +79,9 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                 lines.append(f"  Path: {file['path']}")
                 lines.append("")
 
-        lines.append("You can read text/markdown files using the `read_file` tool with the paths shown above.")
+        lines.append("")
+
+        lines.append("You can read text/markdown files using the `read_file` tool with the virtual `Path` shown above (DO NOT use `Host Path` for `read_file`).")
         lines.append("⚠️ IMPORTANT: DO NOT use the `read_file` tool on image files (PNG, JPG, etc.). They are binary files and will cause errors. Read the extracted `图片类型` and OCR text provided above instead.")
         lines.append("</uploaded_files>")
 
@@ -118,6 +120,7 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                     "filename": filename,
                     "size": int(f.get("size") or 0),
                     "path": f"/mnt/user-data/uploads/{filename}",
+                    "real_path": str(uploads_dir / filename).replace("\\", "/") if uploads_dir else None,
                     "extension": Path(filename).suffix,
                 }
             )
@@ -155,9 +158,13 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         # Resolve uploads directory for existence checks
         thread_id = (runtime.context or {}).get("thread_id")
         uploads_dir = self._paths.sandbox_uploads_dir(thread_id) if thread_id else None
+        logger.info(f"[UploadsMiddleware] thread_id={thread_id}, uploads_dir={uploads_dir}, exists={uploads_dir.exists() if uploads_dir else 'N/A'}")
 
         # Get newly uploaded files from the current message's additional_kwargs.files
+        kwargs_files_raw = (last_message.additional_kwargs or {}).get("files")
+        logger.info(f"[UploadsMiddleware] raw kwargs files: {kwargs_files_raw}")
         new_files = self._files_from_kwargs(last_message, uploads_dir) or []
+        logger.info(f"[UploadsMiddleware] parsed new_files: {[f['filename'] for f in new_files]}")
 
         # Collect historical files from the uploads directory (all except the new ones)
         new_filenames = {f["filename"] for f in new_files}
@@ -168,6 +175,7 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                     file_path.is_file()
                     and file_path.name not in new_filenames
                     and not file_path.name.endswith(".ocr.md")
+                    and not file_path.name.endswith(".meta.json")
                 ):
                     stat = file_path.stat()
                     historical_files.append(
@@ -175,6 +183,7 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                             "filename": file_path.name,
                             "size": stat.st_size,
                             "path": f"/mnt/user-data/uploads/{file_path.name}",
+                            "real_path": str(file_path).replace("\\", "/"),
                             "extension": file_path.suffix,
                         }
                     )

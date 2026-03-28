@@ -17,7 +17,9 @@ import {
   ArtifactFileDetail,
   ArtifactFileList,
   useArtifacts,
+  ImagingReviewPanel,
 } from "../artifacts";
+import { usePendingImagingReports } from "@/core/imaging/api";
 import { useThread } from "../messages/context";
 
 const CLOSE_MODE = { chat: 100, artifacts: 0 };
@@ -41,6 +43,18 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     deselect,
     selectedArtifact,
   } = useArtifacts();
+
+  const { data: pendingReport } = usePendingImagingReports(threadId);
+
+  const [lastOpenedReportId, setLastOpenedReportId] = useState<string | null>(null);
+
+  // Automatically open the side panel if there's a new pending report
+  useEffect(() => {
+    if (pendingReport && pendingReport.report_id !== lastOpenedReportId) {
+      setArtifactsOpen(true);
+      setLastOpenedReportId(pendingReport.report_id);
+    }
+  }, [pendingReport, lastOpenedReportId, setArtifactsOpen]);
 
   const [autoSelectFirstArtifact, setAutoSelectFirstArtifact] = useState(true);
   useEffect(() => {
@@ -130,7 +144,14 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
             artifactPanelOpen ? "translate-x-0" : "translate-x-full",
           )}
         >
-          {selectedArtifact ? (
+          {pendingReport ? (
+            <ImagingReviewPanel
+              className="size-full"
+              threadId={threadId}
+              report={pendingReport}
+              onClose={() => setArtifactsOpen(false)}
+            />
+          ) : selectedArtifact ? (
             <ArtifactFileDetail
               className="size-full"
               filepath={selectedArtifact}

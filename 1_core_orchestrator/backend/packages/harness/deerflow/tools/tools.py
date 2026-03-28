@@ -6,7 +6,7 @@ from deerflow.config import get_app_config
 from deerflow.reflection import resolve_variable
 # [P0-DISABLED] view_image_tool 已停用。P3阶段取消注释恢复。
 # from deerflow.tools.builtins import ask_clarification_tool, present_file_tool, task_tool, view_image_tool
-from deerflow.tools.builtins import ask_clarification_tool, present_file_tool, task_tool
+from deerflow.tools.builtins import ask_clarification_tool, present_file_tool, task_tool, submit_for_review_tool
 from deerflow.tools.builtins.tool_search import reset_deferred_registry
 
 logger = logging.getLogger(__name__)
@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 BUILTIN_TOOLS = [
     present_file_tool,
     ask_clarification_tool,
+    submit_for_review_tool,  # Required for HITL imaging workflow
 ]
 
 SUBAGENT_TOOLS = [

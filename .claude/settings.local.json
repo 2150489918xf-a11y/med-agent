@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONPATH=. uv run pytest tests/ -v --timeout=30)"
+    ]
+  }
+}

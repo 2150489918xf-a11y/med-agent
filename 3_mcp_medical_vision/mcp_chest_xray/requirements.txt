@@ -1,0 +1,15 @@
+# MCP Vision Service Dependencies
+# Core
+mcp>=1.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+
+# Medical AI Models
+torchxrayvision>=0.0.37
+ultralytics>=8.0.0
+segment-anything>=1.0
+
+# Visualization (optional, for standalone use)
+matplotlib>=3.7.0
