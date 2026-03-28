@@ -23,6 +23,90 @@ from vision_config import (
     MERGE_IOU_THRESHOLD, PATHOLOGY_CN
 )
 
+import logging
+_logger = logging.getLogger("mcp-engine")
+
+
+# ============================================================
+# Model Singletons (P0 Speed Optimization)
+# Models are loaded ONCE and stay resident in memory.
+# ============================================================
+_yolo_model = None
+_pspnet_model = None
+_pspnet_targets = None
+_densenet_model = None
+_medsam_predictor = None
+
+
+def _get_yolo():
+    """Lazy-load YOLOv8 model (singleton)."""
+    global _yolo_model
+    if _yolo_model is None:
+        if not os.path.exists(YOLO_WEIGHTS):
+            raise FileNotFoundError(f"YOLO weights not found: {YOLO_WEIGHTS}")
+        _logger.info("[P0] Loading YOLO model (one-time)...")
+        _yolo_model = YOLO(YOLO_WEIGHTS)
+        _logger.info("[P0] YOLO model loaded.")
+    return _yolo_model
+
+
+def _get_pspnet():
+    """Lazy-load PSPNet model (singleton). Returns (model, targets_list)."""
+    global _pspnet_model, _pspnet_targets
+    if _pspnet_model is None:
+        _logger.info("[P0] Loading PSPNet model (one-time)...")
+        _pspnet_model = xrv.baseline_models.chestx_det.PSPNet().to(DEVICE)
+        _pspnet_model.eval()
+        _pspnet_targets = list(_pspnet_model.targets)
+        _logger.info("[P0] PSPNet model loaded.")
+    return _pspnet_model, _pspnet_targets
+
+
+def _get_densenet():
+    """Lazy-load DenseNet121 model (singleton)."""
+    global _densenet_model
+    if _densenet_model is None:
+        _logger.info("[P0] Loading DenseNet121 model (one-time)...")
+        _densenet_model = xrv.models.DenseNet(weights="densenet121-res224-all").to(DEVICE)
+        _densenet_model.eval()
+        _logger.info("[P0] DenseNet121 model loaded.")
+    return _densenet_model
+
+
+def _get_medsam():
+    """Lazy-load MedSAM predictor (singleton). Returns SamPredictor or None."""
+    global _medsam_predictor
+    if _medsam_predictor is None:
+        if not os.path.exists(MEDSAM_CHECKPOINT):
+            _logger.warning("[P0] MedSAM checkpoint not found, skipping.")
+            _medsam_predictor = False  # Sentinel: tried and unavailable
+            return None
+        try:
+            from segment_anything import sam_model_registry, SamPredictor
+            _logger.info("[P0] Loading MedSAM model (one-time)...")
+            medsam = sam_model_registry["vit_b"]()
+            state = torch.load(MEDSAM_CHECKPOINT, map_location=DEVICE, weights_only=True)
+            medsam.load_state_dict(state)
+            medsam = medsam.to(DEVICE).eval()
+            _medsam_predictor = SamPredictor(medsam)
+            _logger.info("[P0] MedSAM model loaded.")
+        except Exception as e:
+            _logger.error(f"[P0] Failed to load MedSAM: {e}")
+            _medsam_predictor = False  # Sentinel: tried and failed
+            return None
+    return _medsam_predictor if _medsam_predictor is not False else None
+
+
+def warmup_models():
+    """Pre-load all models at service startup. Call this once."""
+    _logger.info("[P0] ========== Warming up all models ==========")
+    _get_yolo()
+    _get_pspnet()
+    _get_densenet()
+    # MedSAM is optional, don't fail startup if missing
+    _get_medsam()
+    _logger.info("[P0] ========== All models ready ==========")
+
 
 # ============================================================
 # Data Classes
@@ -62,15 +146,13 @@ def _resize_closest(mask_tensor, target_h, target_w):
 # Phase 1: YOLOv8 + PSPNet Parallel Inference
 # ============================================================
 def phase1_inference(img_path):
-    """Run YOLO detection + PSPNet anatomy segmentation."""
+    """Run YOLO detection + PSPNet anatomy segmentation (using cached models)."""
     img_bgr = cv2.imdecode(np.fromfile(img_path, dtype=np.uint8), cv2.IMREAD_COLOR)
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     img_h, img_w = img_rgb.shape[:2]
 
-    # YOLO
-    if not os.path.exists(YOLO_WEIGHTS):
-        raise FileNotFoundError(f"YOLO weights not found: {YOLO_WEIGHTS}")
-    yolo_model = YOLO(YOLO_WEIGHTS)
+    # YOLO (singleton)
+    yolo_model = _get_yolo()
     yolo_results = yolo_model.predict(img_rgb, conf=0.25, iou=0.4, imgsz=640, verbose=False)
     raw_detections = []
     if len(yolo_results) > 0:
@@ -82,22 +164,19 @@ def phase1_inference(img_path):
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             raw_detections.append(Finding(cls_id, cls_name, conf, [x1, y1, x2, y2]))
 
-    # PSPNet
+    # PSPNet (singleton)
+    seg_model, targets = _get_pspnet()
     img_xrv = xrv.utils.load_image(img_path)
     transform_512 = torchvision.transforms.Compose([
         xrv.datasets.XRayCenterCrop(), xrv.datasets.XRayResizer(512)
     ])
     img_512 = transform_512(img_xrv)
     img_512_t = torch.from_numpy(img_512).unsqueeze(0).to(DEVICE)
-    seg_model = xrv.baseline_models.chestx_det.PSPNet().to(DEVICE)
-    seg_model.eval()
     with torch.no_grad():
         seg_output = seg_model(img_512_t)[0]
-    targets = list(seg_model.targets)
     left_mask = _resize_closest(seg_output[targets.index('Left Lung')], img_h, img_w)
     right_mask = _resize_closest(seg_output[targets.index('Right Lung')], img_h, img_w)
     heart_mask = _resize_closest(seg_output[targets.index('Heart')], img_h, img_w)
-    del seg_model
     torch.cuda.empty_cache()
 
     return img_rgb, raw_detections, left_mask, right_mask, heart_mask
@@ -210,23 +289,16 @@ def filter_and_localize(detections, left_mask, right_mask, heart_mask):
 # Phase 3: MedSAM Segmentation (Optional)
 # ============================================================
 def process_segmentation(valid_findings, img_rgb):
-    """Run MedSAM on solid lesions for precise contour."""
+    """Run MedSAM on solid lesions for precise contour (using cached model)."""
     img_h, img_w = img_rgb.shape[:2]
     solid = [f for f in valid_findings if f.is_solid]
     if not solid:
         return
-    if not os.path.exists(MEDSAM_CHECKPOINT):
+
+    predictor = _get_medsam()
+    if predictor is None:
         return
 
-    from segment_anything import sam_model_registry, SamPredictor
-    medsam = sam_model_registry["vit_b"]()
-    try:
-        state = torch.load(MEDSAM_CHECKPOINT, map_location=DEVICE, weights_only=True)
-        medsam.load_state_dict(state)
-    except Exception:
-        return
-    medsam = medsam.to(DEVICE).eval()
-    predictor = SamPredictor(medsam)
     predictor.set_image(img_rgb)
 
     for finding in solid:
@@ -241,7 +313,6 @@ def process_segmentation(valid_findings, img_rgb):
         except Exception:
             pass
 
-    del medsam, predictor
     torch.cuda.empty_cache()
 
 
@@ -249,19 +320,18 @@ def process_segmentation(valid_findings, img_rgb):
 # DenseNet Classification
 # ============================================================
 def get_densenet_probs(img_path):
-    """Get DenseNet121 classification probabilities."""
+    """Get DenseNet121 classification probabilities (using cached model)."""
+    model = _get_densenet()
     img_xrv = xrv.utils.load_image(img_path)
     transform = torchvision.transforms.Compose([
         xrv.datasets.XRayCenterCrop(), xrv.datasets.XRayResizer(224)
     ])
     img_224 = transform(img_xrv)
-    model = xrv.models.DenseNet(weights="densenet121-res224-all").to(DEVICE).eval()
     with torch.no_grad():
         preds = model(torch.from_numpy(img_224).unsqueeze(0).to(DEVICE))
     all_probs = dict(zip(model.pathologies, preds[0].cpu().numpy()))
     top_probs = {k: round(float(v), 3) for k, v in
                  sorted(all_probs.items(), key=lambda x: -x[1]) if float(v) > 0.1}
-    del model
     torch.cuda.empty_cache()
     return top_probs
 

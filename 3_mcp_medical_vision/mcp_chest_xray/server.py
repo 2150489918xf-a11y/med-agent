@@ -39,6 +39,8 @@ def get_engine():
     if _engine is None:
         import engine as eng
         _engine = eng
+        # [P0] Pre-load all models at first engine access
+        _engine.warmup_models()
     return _engine
 
 
@@ -71,8 +73,8 @@ async def list_tools():
                     },
                     "enable_sam": {
                         "type": "boolean",
-                        "description": "是否启用MedSAM精细轮廓分割 (默认true，关闭可加速)",
-                        "default": True
+                        "description": "是否启用MedSAM精细轮廓分割 (默认false，开启可获得更精确轮廓)",
+                        "default": False
                     }
                 },
                 "required": ["image_path"]
@@ -86,7 +88,7 @@ async def call_tool(name: str, arguments: dict):
     try:
         if name == "analyze_xray":
             image_path = arguments["image_path"]
-            enable_sam = arguments.get("enable_sam", True)
+            enable_sam = arguments.get("enable_sam", False)  # [P0] Default OFF for speed
 
             if not os.path.exists(image_path):
                 return [TextContent(type="text", text=json.dumps({

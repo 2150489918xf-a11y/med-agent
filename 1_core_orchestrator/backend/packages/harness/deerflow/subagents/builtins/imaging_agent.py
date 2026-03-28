@@ -7,8 +7,8 @@ Currently provides a stub interface for future ML tool integration.
 from deerflow.config.subagents_config import get_subagents_app_config
 from deerflow.subagents.config import SubagentConfig
 
-# 默认VL模型，config.yaml 中未配置时使用此值
-_DEFAULT_IMAGING_MODEL = "qwen3-vl-235b"
+# [P0] 影像Agent不需要视觉能力（只转发路径给MCP），使用轻量MoE模型（35B/激活3B）
+_DEFAULT_IMAGING_MODEL = "qwen3.5-35b"
 
 
 def _resolve_imaging_model() -> str:
@@ -76,8 +76,8 @@ IMAGING_AGENT_CONFIG = SubagentConfig(
 </important_rules>
 """,
     tools=None,  # 设为 None 允许所有可用工具（从而允许动态加载的 MCP 视觉分析工具）
-    disallowed_tools=["task", "ask_clarification", "setup_agent", "present_file_tool"],
-    model=_resolve_imaging_model(),  # [P3-NOTE] 从config.yaml读取，默认VL模型，未来可作为MCP不可用时的视觉兜底
-    max_turns=30,
+    disallowed_tools=["task", "ask_clarification", "setup_agent", "present_file_tool", "submit_for_review"],  # [P0] submit_for_review 已由 MCP 自动拦截器处理，禁止手动调用避免双重审核
+    model=_resolve_imaging_model(),  # [P0] 默认qwen3.5-35b轻量MoE模型，config.yaml可覆盖
+    max_turns=10,  # [P0] 影像Agent只需2-3轮（理解→工具调用→格式化），10轮足够
 )
 

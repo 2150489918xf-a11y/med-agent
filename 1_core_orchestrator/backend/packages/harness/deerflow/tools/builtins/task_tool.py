@@ -113,8 +113,8 @@ def task_tool(
     poll_count = 0
     last_status = None
     last_message_count = 0  # Track how many AI messages we've already sent
-    # Polling timeout: execution timeout + 60s buffer, checked every 5s
-    max_poll_count = (config.timeout_seconds + 60) // 5
+    # Polling timeout: execution timeout + 60s buffer, checked every 1s
+    max_poll_count = config.timeout_seconds + 60
 
     logger.info(f"[trace={trace_id}] Started background task {task_id} (subagent={subagent_type}, timeout={config.timeout_seconds}s, polling_limit={max_poll_count} polls)")
 
@@ -172,11 +172,11 @@ def task_tool(
             return f"Task timed out. Error: {result.error}"
 
         # Still running, wait before next poll
-        time.sleep(5)  # Poll every 5 seconds
+        time.sleep(1)  # [P0] Poll every 1 second (was 5s)
         poll_count += 1
 
         # Polling timeout as a safety net (in case thread pool timeout doesn't work)
-        # Set to execution timeout + 60s buffer, in 5s poll intervals
+        # Set to execution timeout + 60s buffer, in 1s poll intervals
         # This catches edge cases where the background task gets stuck
         # Note: We don't call cleanup_background_task here because the task may
         # still be running in the background. The cleanup will happen when the

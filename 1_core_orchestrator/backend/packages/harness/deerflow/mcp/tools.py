@@ -85,7 +85,12 @@ def _make_async_tool_wrapper(coro: Callable[..., Any], tool_name: str) -> Callab
     """
 
 async def _maybe_intercept_hitl(tool_name: str, result: Any, translated_kwargs: dict[str, Any]) -> Any:
-    """Check if the tool call should be intercepted for HITL review."""
+    """Check if the tool call should be intercepted for HITL review.
+    
+    IMPORTANT: MCP tools use response_format='content_and_artifact', so the
+    original `result` is a tuple: (content_list, artifact). We MUST return
+    data in the same tuple format, otherwise LangChain raises ValueError.
+    """
     # MCP tools often have prefixes like 'server--tool', so use endswith
     if not tool_name.endswith("analyze_xray"):
         return result
@@ -95,6 +100,9 @@ async def _maybe_intercept_hitl(tool_name: str, result: Any, translated_kwargs: 
         import json
         import uuid
         from deerflow.config.paths import get_paths
+        
+        # Remember original format to preserve it on return
+        is_tuple = isinstance(result, tuple)
         
         # Extract the thread_id directly from the translated absolute file path
         image_path = str(translated_kwargs.get("image_path", ""))
@@ -118,9 +126,9 @@ async def _maybe_intercept_hitl(tool_name: str, result: Any, translated_kwargs: 
         report_file = reports_dir / f"{report_id}.json"
         
         try:
-            # LangChain MCP tool coroutines often return a tuple: (content, artifact)
+            # LangChain MCP tool coroutines return a tuple: (content, artifact)
             # where content is a list of dicts: [{'type': 'text', 'text': '{"json": "here"}'}]
-            content = result[0] if isinstance(result, tuple) else result
+            content = result[0] if is_tuple else result
             
             json_text = ""
             if isinstance(content, list):
@@ -176,14 +184,15 @@ async def _maybe_intercept_hitl(tool_name: str, result: Any, translated_kwargs: 
                 data = json.loads(report_file.read_text(encoding="utf-8"))
                 if data.get("status") == "reviewed":
                     logger.info(f"[HITL-Auto] Report {report_id} reviewed by doctor")
-                    # IMPORTANT: Return the reviewed data in the SAME FORMAT as the initial call
-                    # which is a LangChain compliant format (usually a list of content if possible)
                     reviewed_data = data.get("doctor_result") or data.get("ai_result", {})
+                    reviewed_json = json.dumps(reviewed_data, ensure_ascii=False)
                     
-                    # If the original result was a list, we should probably return a list/TextContent?
-                    # Or just return the JSON string - LangChain agents can typically handle both.
-                    # Given the subagent executor's expectations, a clean JSON string is safest.
-                    return json.dumps(reviewed_data, ensure_ascii=False)
+                    # CRITICAL: Preserve the original tuple format.
+                    # MCP tools use response_format='content_and_artifact'.
+                    # LangChain expects (content_str, artifact) — NOT a plain str.
+                    if is_tuple:
+                        return (reviewed_json, result[1] if len(result) > 1 else None)
+                    return reviewed_json
             except Exception as e:
                 logger.warning(f"[HITL-Auto] Error reading report file: {e}")
             
