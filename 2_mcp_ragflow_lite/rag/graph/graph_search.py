@@ -79,9 +79,9 @@ class GraphSearcher:
     执行流程：查询改写 → 四路并行检索 → PageRank 融合 → 格式化输出
     """
 
-    # 查询改写缓存：最多 128 条，5 分钟 TTL
-    _CACHE_MAX = 128
-    _CACHE_TTL = 300  # 秒
+    # 查询改写缓存：最多 512 条，1 小时 TTL（比赛场景下不需要频繁过期）
+    _CACHE_MAX = 512
+    _CACHE_TTL = 3600  # 秒
 
     def __init__(self, es_conn: DocStoreConnection = None, emb_mdl: BaseEmbedding = None,
                  chat_client: BaseChatClient = None, graph_store: GraphStore = None):
@@ -90,6 +90,9 @@ class GraphSearcher:
         self.chat = chat_client or get_chat_client()
         self.graph_store = graph_store
         self._rewrite_cache: OrderedDict[str, tuple[float, 'QueryAnalysis']] = OrderedDict()
+        # search_with_qa 整体结果缓存
+        self._search_cache: OrderedDict[str, tuple[float, 'GraphSearchResult']] = OrderedDict()
+        self._search_cache_max = 256
 
     # ==================== Step 1: 查询改写 ====================
 
@@ -399,7 +402,19 @@ class GraphSearcher:
                               n_hops=2) -> GraphSearchResult:
         """
         GraphRAG 检索（使用预计算的 QueryAnalysis，适用于并行优化场景）
+        含 LRU 结果缓存：相同 question + kb_ids 组合直接返回缓存结果。
         """
+        # ── 缓存命中检查 ──
+        cache_key = f"{question.strip().lower()}|{'|'.join(sorted(kb_ids))}"
+        if cache_key in self._search_cache:
+            ts, cached = self._search_cache[cache_key]
+            if time.time() - ts < self._CACHE_TTL:
+                logger.info(f"GraphRAG search cache HIT: {question[:30]}...")
+                self._search_cache.move_to_end(cache_key)
+                return cached
+            else:
+                del self._search_cache[cache_key]
+
         idx_names = [index_name(kb_id) for kb_id in kb_ids]
 
         # Step 2: 四路并行检索
@@ -426,12 +441,19 @@ class GraphSearcher:
         # Step 4: 格式化输出
         context = self.format_context(ranked_entities, ranked_relations, paths)
 
-        return GraphSearchResult(
+        result = GraphSearchResult(
             entities=ranked_entities,
             relations=ranked_relations,
             paths=paths,
             formatted_context=context,
         )
+
+        # ── 写入缓存 ──
+        self._search_cache[cache_key] = (time.time(), result)
+        if len(self._search_cache) > self._search_cache_max:
+            self._search_cache.popitem(last=False)
+
+        return result
 
     async def enhanced_retrieval(self, question: str, kb_ids: list,
                                  text_chunks: list = None,

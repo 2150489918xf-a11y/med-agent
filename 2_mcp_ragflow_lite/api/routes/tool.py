@@ -177,15 +177,19 @@ async def tool_retrieve(req: ToolRetrieveRequest):
     chunks = es_result.get("chunks", [])
     total = es_result.get("total", 0)
 
-    # ── Step 2: Reranker 精排 ──
+    # ── Step 2: Reranker 精排 (含置信度短路) ──
+    fast_path = chunks and chunks[0].get("similarity", 0) > 0.85
+
     reranker = get_reranker()
-    if reranker and chunks:
+    if reranker and chunks and not fast_path:
         try:
             chunks = reranker.rerank_chunks(req.query, chunks, top_n=req.top_k)
         except Exception as e:
             logger.warning(f"Reranker failed: {e}")
             chunks = chunks[:req.top_k]
     else:
+        if fast_path:
+            logger.info(f"Reranker fast-path: top similarity={chunks[0].get('similarity', 0):.3f} > 0.85, skipping reranker")
         chunks = chunks[:req.top_k]
 
     graph_context = ""
@@ -207,23 +211,31 @@ async def tool_retrieve(req: ToolRetrieveRequest):
             except Exception as e:
                 logger.warning(f"GraphRAG failed: {e}")
 
-    # ── Step 4: CRAG (deep only) ──
+    # ── Step 4: CRAG (deep only, 含超时保护) ──
     crag_action = ""
     if mode == "deep":
         crag = get_crag_router()
         if crag:
+            from rag.settings import get_config
+            crag_timeout = get_config().get("crag", {}).get("timeout_seconds", 2.5)
             try:
-                crag_result = await crag.route(
-                    question=req.query,
-                    local_chunks=chunks,
-                    graph_context=graph_context,
-                    enable_web_search=req.enable_web_search,
+                crag_result = await asyncio.wait_for(
+                    crag.route(
+                        question=req.query,
+                        local_chunks=chunks,
+                        graph_context=graph_context,
+                        enable_web_search=req.enable_web_search,
+                    ),
+                    timeout=crag_timeout,
                 )
                 chunks = crag_result["chunks"]
                 graph_context = crag_result["graph_context"]
                 crag_score = crag_result["crag_score"]
                 crag_reason = crag_result["crag_reason"]
                 crag_action = crag_result["crag_action"]
+            except asyncio.TimeoutError:
+                logger.warning(f"CRAG timeout ({crag_timeout}s), using local results as fallback")
+                crag_action = f"TIMEOUT: CRAG 超时 ({crag_timeout}s)，使用本地结果"
             except Exception as e:
                 logger.warning(f"CRAG failed: {e}")
 

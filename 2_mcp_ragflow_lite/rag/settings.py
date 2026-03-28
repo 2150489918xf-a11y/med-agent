@@ -81,6 +81,11 @@ class CRAGConfig(BaseModel):
     enabled: bool = False
     tavily_api_key: str = ""
     search_provider: str = "tavily"
+    timeout_seconds: float = Field(default=2.5, ge=0.5, le=30.0, description="CRAG 路由超时 (秒)")
+
+
+class SearchConfig(BaseModel):
+    use_native_rrf: bool = Field(default=False, description="启用 ES 8.8+ 原生 RRF 融合")
 
 
 # ══════════════════════════════════════════
@@ -96,6 +101,7 @@ class ServiceConfig(BaseModel):
     rag: RAGConfig = RAGConfig()
     reranker: RerankerConfig = RerankerConfig()
     graph: GraphConfig = GraphConfig()
+    search: SearchConfig = SearchConfig()
     crag: CRAGConfig = CRAGConfig()
 
     model_config = {"extra": "forbid"}  # 禁止未知字段，防止拼写错误

@@ -121,3 +121,61 @@ class TestQuery:
         qryr = FulltextQueryer()
         match_expr, keywords = qryr.question("What is artificial intelligence?")
         assert isinstance(keywords, list)
+
+
+class TestEmbeddingCache:
+    """Embedding 查询缓存测试"""
+
+    def test_embedding_query_cache(self):
+        """相同文本的第二次 encode_queries 应命中缓存，不再调用 API"""
+        from unittest.mock import MagicMock, patch
+        from rag.llm.embedding import RemoteEmbedding
+        import numpy as np
+
+        emb = RemoteEmbedding(api_key="test-key", model_name="test-model", base_url="http://fake")
+
+        # Mock OpenAI client
+        mock_data = MagicMock()
+        mock_data.embedding = [0.1, 0.2, 0.3]
+        mock_response = MagicMock()
+        mock_response.data = [mock_data]
+        mock_response.usage = MagicMock(total_tokens=5)
+        emb.client.embeddings.create = MagicMock(return_value=mock_response)
+
+        # 第一次调用 → 应触发 API
+        vec1, tok1 = emb.encode_queries("测试查询")
+        assert emb.client.embeddings.create.call_count == 1
+        assert isinstance(vec1, np.ndarray)
+
+        # 第二次调用相同文本 → 应命中缓存
+        vec2, tok2 = emb.encode_queries("测试查询")
+        assert emb.client.embeddings.create.call_count == 1  # 仍然只调用了 1 次
+        np.testing.assert_array_equal(vec1, vec2)
+
+    def test_embedding_cache_lru_eviction(self):
+        """缓存超出 max 后应淘汰最老的条目"""
+        from unittest.mock import MagicMock
+        from rag.llm.embedding import RemoteEmbedding
+
+        emb = RemoteEmbedding(api_key="test-key", model_name="test-model", base_url="http://fake")
+        emb._QUERY_CACHE_MAX = 3  # 缩小容量以便测试
+
+        mock_data = MagicMock()
+        mock_data.embedding = [0.1]
+        mock_response = MagicMock()
+        mock_response.data = [mock_data]
+        mock_response.usage = MagicMock(total_tokens=1)
+        emb.client.embeddings.create = MagicMock(return_value=mock_response)
+
+        # 填满缓存: query_0, query_1, query_2
+        for i in range(3):
+            emb.encode_queries(f"query_{i}")
+        assert len(emb._query_cache) == 3
+
+        # 插入第 4 个 → query_0 应被淘汰
+        emb.encode_queries("query_3")
+        assert len(emb._query_cache) == 3
+        assert "query_0" not in emb._query_cache
+        assert "query_3" in emb._query_cache
+
+
