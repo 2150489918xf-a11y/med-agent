@@ -53,11 +53,11 @@ export const zhCN: Translations = {
   welcome: {
     greeting: "你好，欢迎回来！",
     description:
-      "欢迎使用 🦌 DeerFlow，一个完全开源的超级智能体。通过内置和自定义的 Skills，\nDeerFlow 可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n图片、视频、播客及网页等，几乎可以做任何事情。",
+      "欢迎使用 MedAgent。这里是面向医疗场景的智能工作台，可协助完成问诊沟通、报告解读与临床信息整理。",
 
     createYourOwnSkill: "创建你自己的 Agent SKill",
     createYourOwnSkillDescription:
-      "创建你的 Agent Skill 来释放 DeerFlow 的潜力。通过自定义技能，DeerFlow\n可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n网页等作品，几乎可以做任何事情。",
+      "可通过创建自定义 Skill 扩展系统能力，适配不同医疗业务流程。",
   },
 
   // Clipboard
@@ -94,8 +94,8 @@ export const zhCN: Translations = {
     reasoningEffortHigh: "高",
     reasoningEffortHighDescription: "全维度逻辑推演 + 多路径验证 + 反推校验",
     searchModels: "搜索模型...",
-    surpriseMe: "小惊喜",
-    surpriseMePrompt: "给我一个小惊喜吧",
+    surpriseMe: "随机问诊任务",
+    surpriseMePrompt: "给我一个临床相关的任务建议",
     followupLoading: "正在生成可能的后续问题...",
     followupConfirmTitle: "发送建议问题？",
     followupConfirmDescription: "当前输入框已有内容，选择发送方式。",
@@ -103,49 +103,49 @@ export const zhCN: Translations = {
     followupConfirmReplace: "替换并发送",
     suggestions: [
       {
-        suggestion: "写作",
-        prompt: "撰写一篇关于[主题]的博客文章",
+        suggestion: "影像分析",
+        prompt: "请解读这份影像报告，输出关键异常、可能意义与建议复查项。",
         icon: PenLineIcon,
       },
       {
-        suggestion: "研究",
-        prompt: "深入浅出的研究一下[主题]，并总结发现。",
+        suggestion: "化验解读",
+        prompt: "请解读这份化验单，标记异常指标并给出可理解的说明。",
         icon: MicroscopeIcon,
       },
       {
-        suggestion: "收集",
-        prompt: "从[来源]收集数据并创建报告。",
+        suggestion: "文献检索",
+        prompt: "请检索[疾病/治疗方案]相关近三年证据并总结结论。",
         icon: ShapesIcon,
       },
       {
-        suggestion: "学习",
-        prompt: "学习关于[主题]并创建教程。",
+        suggestion: "病历查询",
+        prompt: "请根据主诉整理结构化病历并列出后续问诊要点。",
         icon: GraduationCapIcon,
       },
     ],
     suggestionsCreate: [
       {
-        suggestion: "网页",
-        prompt: "生成一个关于[主题]的网页",
+        suggestion: "会诊摘要",
+        prompt: "基于当前对话生成会诊摘要与转诊建议。",
         icon: CompassIcon,
       },
       {
-        suggestion: "图片",
-        prompt: "生成一个关于[主题]的图片",
+        suggestion: "复诊提醒",
+        prompt: "根据病情生成患者复诊与复查提醒清单。",
         icon: ImageIcon,
       },
       {
-        suggestion: "视频",
-        prompt: "生成一个关于[主题]的视频",
+        suggestion: "宣教内容",
+        prompt: "生成患者可读的出院宣教说明与注意事项。",
         icon: VideoIcon,
       },
       {
         type: "separator",
       },
       {
-        suggestion: "技能",
+        suggestion: "流程技能",
         prompt:
-          "我们一起用 skill-creator 技能来创建一个技能吧。先问问我希望这个技能能做什么。",
+          "我们一起创建一个医疗流程技能。先问我该技能用于哪个场景。",
         icon: SparklesIcon,
       },
     ],
@@ -197,13 +197,13 @@ export const zhCN: Translations = {
 
   // Workspace
   workspace: {
-    officialWebsite: "访问 DeerFlow 官方网站",
-    githubTooltip: "访问 DeerFlow 的 Github 仓库",
+    officialWebsite: "官网",
+    githubTooltip: "外部链接",
     settingsAndMore: "设置和更多",
-    visitGithub: "在 Github 上查看 DeerFlow",
-    reportIssue: "报告问题",
-    contactUs: "联系我们",
-    about: "关于 DeerFlow",
+    visitGithub: "GitHub",
+    reportIssue: "问题反馈",
+    contactUs: "联系支持",
+    about: "关于 MedAgent",
   },
 
   // Conversation
@@ -219,7 +219,7 @@ export const zhCN: Translations = {
 
   // Page titles (document title)
   pages: {
-    appName: "DeerFlow",
+    appName: "MedAgent",
     chats: "对话",
     newChat: "新对话",
     untitled: "未命名",
@@ -244,7 +244,7 @@ export const zhCN: Translations = {
     writeFile: "写入文件",
     clickToViewContent: "点击查看文件内容",
     writeTodos: "更新 To-do 列表",
-    skillInstallTooltip: "安装技能并使其可在 DeerFlow 中使用",
+    skillInstallTooltip: "安装技能并使其可在 MedAgent 中使用",
   },
 
   uploads: {
@@ -275,7 +275,7 @@ export const zhCN: Translations = {
     noResults: "未找到结果。",
     actions: "操作",
     keyboardShortcuts: "键盘快捷键",
-    keyboardShortcutsDescription: "使用键盘快捷键更快地操作 DeerFlow。",
+    keyboardShortcutsDescription: "使用键盘快捷键更快地操作 MedAgent。",
     openCommandPalette: "打开命令面板",
     toggleSidebar: "切换侧边栏",
   },
@@ -283,10 +283,12 @@ export const zhCN: Translations = {
   // Settings
   settings: {
     title: "设置",
-    description: "根据你的偏好调整 DeerFlow 的界面和行为。",
+    description: "根据你的偏好调整 MedAgent 的界面和行为。",
     sections: {
       appearance: "外观",
       memory: "记忆",
+      modelProviders: "模型服务",
+      agentsConfig: "Agent 配置",
       tools: "工具",
       skills: "技能",
       notification: "通知",
@@ -295,7 +297,7 @@ export const zhCN: Translations = {
     memory: {
       title: "记忆",
       description:
-        "DeerFlow 会在后台不断从你的对话中自动学习。这些记忆能帮助 DeerFlow 更好地理解你，并提供更个性化的体验。",
+        "MedAgent 会在后台持续总结对话上下文，用于提升后续交互质量与个性化体验。",
       empty: "暂无可展示的记忆数据。",
       rawJson: "原始 JSON",
       markdown: {
@@ -349,21 +351,56 @@ export const zhCN: Translations = {
       createSkill: "新建技能",
       emptyTitle: "还没有技能",
       emptyDescription:
-        "将你的 Agent Skill 文件夹放在 DeerFlow 根目录下的 `/skills/custom` 文件夹中。",
+        "将你的 Agent Skill 文件夹放在 MedAgent 根目录下的 `/skills/custom` 文件夹中。",
       emptyButton: "创建你的第一个技能",
     },
     notification: {
       title: "通知",
       description:
-        "DeerFlow 只会在窗口不活跃时发送完成通知，特别适合长时间任务：你可以先去做别的事，完成后会收到提醒。",
+        "MedAgent 仅在窗口不活跃时发送任务完成通知，适合长时间任务场景。",
       requestPermission: "请求通知权限",
       deniedHint:
         "通知权限已被拒绝。可在浏览器的网站设置中重新开启，以接收完成提醒。",
       testButton: "发送测试通知",
-      testTitle: "DeerFlow",
+      testTitle: "MedAgent",
       testBody: "这是一条测试通知。",
       notSupported: "当前浏览器不支持通知功能。",
       disableNotification: "关闭通知",
+    },
+    modelProviders: {
+      title: "模型服务",
+      description:
+        "配置各厂商 API 地址与密钥；保存后会同步到 `config.yaml` 中对应模型条目。",
+      enabled: "启用",
+      baseUrl: "API Base URL",
+      apiKey: "API Key",
+      apiKeyHint: "留空或含 **** 表示不修改已保存的密钥。",
+      allowlist: "模型白名单（Ollama）",
+      allowlistHint: "可选，逗号或换行分隔的模型名。",
+      save: "保存",
+      testConnection: "测试连接",
+      testing: "测试中…",
+      testSuccess: "连接成功",
+      testError: "连接失败",
+      loadError: "加载模型服务配置失败",
+      modelsReturned: "返回模型数",
+      retry: "重试",
+    },
+    agentsConfig: {
+      title: "Agent 配置",
+      description: "为 Lead、影像与知识库代理绑定模型与生成参数；主代理绑定会调整 `models` 列表顺序。",
+      model: "模型",
+      temperature: "温度",
+      systemPrompt: "系统提示词",
+      thinkingMode: "思考模式",
+      save: "保存",
+      reset: "恢复默认",
+      resetting: "恢复中…",
+      loadError: "加载 Agent 配置失败",
+      saved: "已保存",
+      visionWarning:
+        "当前模型可能不支持视觉输入，影像分析可能失败。建议选择带视觉能力的模型。",
+      visionBadge: "视觉",
     },
     acknowledge: {
       emptyTitle: "致谢",

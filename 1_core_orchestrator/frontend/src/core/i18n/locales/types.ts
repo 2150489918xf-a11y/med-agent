@@ -237,6 +237,8 @@ export interface Translations {
     sections: {
       appearance: string;
       memory: string;
+      modelProviders: string;
+      agentsConfig: string;
       tools: string;
       skills: string;
       notification: string;
@@ -314,6 +316,39 @@ export interface Translations {
     acknowledge: {
       emptyTitle: string;
       emptyDescription: string;
+    };
+    modelProviders: {
+      title: string;
+      description: string;
+      enabled: string;
+      baseUrl: string;
+      apiKey: string;
+      apiKeyHint: string;
+      allowlist: string;
+      allowlistHint: string;
+      save: string;
+      testConnection: string;
+      testing: string;
+      testSuccess: string;
+      testError: string;
+      loadError: string;
+      modelsReturned: string;
+      retry: string;
+    };
+    agentsConfig: {
+      title: string;
+      description: string;
+      model: string;
+      temperature: string;
+      systemPrompt: string;
+      thinkingMode: string;
+      save: string;
+      reset: string;
+      resetting: string;
+      loadError: string;
+      saved: string;
+      visionWarning: string;
+      visionBadge: string;
     };
   };
 }

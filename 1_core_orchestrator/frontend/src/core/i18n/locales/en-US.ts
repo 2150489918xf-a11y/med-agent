@@ -53,11 +53,11 @@ export const enUS: Translations = {
   welcome: {
     greeting: "Hello, again!",
     description:
-      "Welcome to 🦌 DeerFlow, an open source super agent. With built-in and custom skills, DeerFlow helps you search on the web, analyze data, and generate artifacts like slides, web pages and do almost anything.",
+      "Welcome to MedAgent. This workspace is designed for medical assistance, report interpretation, and clinical information collaboration.",
 
     createYourOwnSkill: "Create Your Own Skill",
     createYourOwnSkillDescription:
-      "Create your own skill to release the power of DeerFlow. With customized skills,\nDeerFlow can help you search on the web, analyze data, and generate\n artifacts like slides, web pages and do almost anything.",
+      "Create custom skills to extend MedAgent for your own medical workflows.",
   },
 
   // Clipboard
@@ -98,8 +98,8 @@ export const enUS: Translations = {
     reasoningEffortHighDescription:
       "Full-dimensional Logic Deduction + Multi-path Verification + Backward Check",
     searchModels: "Search models...",
-    surpriseMe: "Surprise",
-    surpriseMePrompt: "Surprise me",
+    surpriseMe: "Random medical task",
+    surpriseMePrompt: "Give me a medical workflow suggestion",
     followupLoading: "Generating follow-up questions...",
     followupConfirmTitle: "Send suggestion?",
     followupConfirmDescription:
@@ -108,50 +108,56 @@ export const enUS: Translations = {
     followupConfirmReplace: "Replace & send",
     suggestions: [
       {
-        suggestion: "Write",
-        prompt: "Write a blog post about the latest trends on [topic]",
+        suggestion: "Imaging analysis",
+        prompt:
+          "Interpret this imaging report and summarize key abnormalities with suggested follow-up checks.",
         icon: PenLineIcon,
       },
       {
-        suggestion: "Research",
+        suggestion: "Lab interpretation",
         prompt:
-          "Conduct a deep dive research on [topic], and summarize the findings.",
+          "Interpret this lab panel, highlight abnormal indicators, and explain possible clinical implications.",
         icon: MicroscopeIcon,
       },
       {
-        suggestion: "Collect",
-        prompt: "Collect data from [source] and create a report.",
+        suggestion: "Literature search",
+        prompt:
+          "Search evidence from the last 3 years about [disease/treatment] and summarize takeaways.",
         icon: ShapesIcon,
       },
       {
-        suggestion: "Learn",
-        prompt: "Learn about [topic] and create a tutorial.",
+        suggestion: "Case summary",
+        prompt:
+          "Generate a structured case summary from this conversation and list key follow-up questions.",
         icon: GraduationCapIcon,
       },
     ],
     suggestionsCreate: [
       {
-        suggestion: "Webpage",
-        prompt: "Create a webpage about [topic]",
+        suggestion: "Consult summary",
+        prompt:
+          "Create a concise consultation summary with referral recommendations.",
         icon: CompassIcon,
       },
       {
-        suggestion: "Image",
-        prompt: "Create an image about [topic]",
+        suggestion: "Follow-up plan",
+        prompt:
+          "Generate a patient-friendly follow-up checklist and timeline.",
         icon: ImageIcon,
       },
       {
-        suggestion: "Video",
-        prompt: "Create a video about [topic]",
+        suggestion: "Patient education",
+        prompt:
+          "Draft discharge education notes and precautions for the patient.",
         icon: VideoIcon,
       },
       {
         type: "separator",
       },
       {
-        suggestion: "Skill",
+        suggestion: "Workflow skill",
         prompt:
-          "We're going to build a new skill step by step with `skill-creator`. To start, what do you want this skill to do?",
+          "Let's create a new medical workflow skill. First tell me the scenario this skill should support.",
         icon: SparklesIcon,
       },
     ],
@@ -208,13 +214,13 @@ export const enUS: Translations = {
 
   // Workspace
   workspace: {
-    officialWebsite: "DeerFlow's official website",
-    githubTooltip: "DeerFlow on Github",
+    officialWebsite: "Official website",
+    githubTooltip: "External link",
     settingsAndMore: "Settings and more",
-    visitGithub: "DeerFlow on GitHub",
-    reportIssue: "Report a issue",
-    contactUs: "Contact us",
-    about: "About DeerFlow",
+    visitGithub: "GitHub",
+    reportIssue: "Report issue",
+    contactUs: "Contact support",
+    about: "About MedAgent",
   },
 
   // Conversation
@@ -230,7 +236,7 @@ export const enUS: Translations = {
 
   // Page titles (document title)
   pages: {
-    appName: "DeerFlow",
+    appName: "MedAgent",
     chats: "Chats",
     newChat: "New chat",
     untitled: "Untitled",
@@ -256,7 +262,7 @@ export const enUS: Translations = {
     writeFile: "Write file",
     clickToViewContent: "Click to view file content",
     writeTodos: "Update to-do list",
-    skillInstallTooltip: "Install skill and make it available to DeerFlow",
+    skillInstallTooltip: "Install skill and make it available to MedAgent",
   },
 
   // Subtasks
@@ -288,7 +294,8 @@ export const enUS: Translations = {
     noResults: "No results found.",
     actions: "Actions",
     keyboardShortcuts: "Keyboard Shortcuts",
-    keyboardShortcutsDescription: "Navigate DeerFlow faster with keyboard shortcuts.",
+    keyboardShortcutsDescription:
+      "Navigate MedAgent faster with keyboard shortcuts.",
     openCommandPalette: "Open Command Palette",
     toggleSidebar: "Toggle Sidebar",
   },
@@ -296,10 +303,12 @@ export const enUS: Translations = {
   // Settings
   settings: {
     title: "Settings",
-    description: "Adjust how DeerFlow looks and behaves for you.",
+    description: "Adjust how MedAgent looks and behaves for you.",
     sections: {
       appearance: "Appearance",
       memory: "Memory",
+      modelProviders: "Model providers",
+      agentsConfig: "Agent configuration",
       tools: "Tools",
       skills: "Skills",
       notification: "Notification",
@@ -308,7 +317,7 @@ export const enUS: Translations = {
     memory: {
       title: "Memory",
       description:
-        "DeerFlow automatically learns from your conversations in the background. These memories help DeerFlow understand you better and deliver a more personalized experience.",
+        "MedAgent summarizes conversation context in the background to improve follow-up interactions.",
       empty: "No memory data to display.",
       rawJson: "Raw JSON",
       markdown: {
@@ -364,21 +373,57 @@ export const enUS: Translations = {
       createSkill: "Create skill",
       emptyTitle: "No agent skill yet",
       emptyDescription:
-        "Put your agent skill folders under the `/skills/custom` folder under the root folder of DeerFlow.",
+        "Put your agent skill folders under the `/skills/custom` folder in the MedAgent project root.",
       emptyButton: "Create Your First Skill",
     },
     notification: {
       title: "Notification",
       description:
-        "DeerFlow only sends a completion notification when the window is not active. This is especially useful for long-running tasks so you can switch to other work and get notified when done.",
+        "MedAgent sends completion notifications only when the window is not active, which is ideal for long-running tasks.",
       requestPermission: "Request notification permission",
       deniedHint:
         "Notification permission was denied. You can enable it in your browser's site settings to receive completion alerts.",
       testButton: "Send test notification",
-      testTitle: "DeerFlow",
+      testTitle: "MedAgent",
       testBody: "This is a test notification.",
       notSupported: "Your browser does not support notifications.",
       disableNotification: "Disable notification",
+    },
+    modelProviders: {
+      title: "Model providers",
+      description:
+        "Configure vendor base URLs and API keys; saving syncs matching entries in `config.yaml`.",
+      enabled: "Enabled",
+      baseUrl: "API base URL",
+      apiKey: "API key",
+      apiKeyHint: "Leave blank or keep **** to avoid changing the stored secret.",
+      allowlist: "Model allowlist (Ollama)",
+      allowlistHint: "Optional; comma or newline separated model names.",
+      save: "Save",
+      testConnection: "Test connection",
+      testing: "Testing…",
+      testSuccess: "Connection OK",
+      testError: "Connection failed",
+      loadError: "Failed to load provider settings",
+      modelsReturned: "Models returned",
+      retry: "Retry",
+    },
+    agentsConfig: {
+      title: "Agent configuration",
+      description:
+        "Bind models and sampling for Lead, imaging, and RAG agents; Lead binding reorders the `models` list.",
+      model: "Model",
+      temperature: "Temperature",
+      systemPrompt: "System prompt",
+      thinkingMode: "Thinking mode",
+      save: "Save",
+      reset: "Reset to defaults",
+      resetting: "Resetting…",
+      loadError: "Failed to load agent settings",
+      saved: "Saved",
+      visionWarning:
+        "This model may not support vision; imaging tasks can fail. Prefer a vision-capable model.",
+      visionBadge: "Vision",
     },
     acknowledge: {
       emptyTitle: "Acknowledgements",
