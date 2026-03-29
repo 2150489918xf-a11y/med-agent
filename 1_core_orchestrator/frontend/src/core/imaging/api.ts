@@ -9,6 +9,7 @@ export interface ImagingReport {
   image_path: string;
   ai_result: any;
   doctor_result: any | null;
+  version?: number;
 }
 
 /**
@@ -43,7 +44,33 @@ export function usePendingImagingReports(threadId: string | undefined, enabled =
 }
 
 /**
- * Hook to submit the doctor's review.
+ * Hook to fetch reviewed imaging reports (non-polling).
+ * Driven by invalidateQueries after review submission.
+ */
+export function useReviewedImagingReports(threadId: string | undefined) {
+  return useQuery({
+    queryKey: ["imaging_reports", threadId, "reviewed"],
+    queryFn: async () => {
+      if (!threadId) return [];
+      try {
+        const response = await fetch(
+          `${getBackendBaseURL()}/api/threads/${threadId}/imaging-reports?status=reviewed`,
+        );
+        if (!response.ok) throw new Error("Failed to fetch reviewed reports");
+        const data = await response.json() as { reports: ImagingReport[] };
+        return data.reports || [];
+      } catch (error) {
+        console.error("Failed to fetch reviewed reports:", error);
+        return [];
+      }
+    },
+    enabled: !!threadId,
+    // No refetchInterval — only refreshed via invalidateQueries
+  });
+}
+
+/**
+ * Submit the doctor's review.
  */
 export async function submitImagingReview(
   threadId: string,

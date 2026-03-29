@@ -24,6 +24,8 @@ class RemoteEmbedding(BaseEmbedding):
 
     # 查询向量缓存配置
     _QUERY_CACHE_MAX = 4096
+    _cache_hits = 0
+    _cache_misses = 0
 
     def __init__(self, api_key, model_name, base_url="https://api.openai.com/v1"):
         if not base_url:
@@ -81,10 +83,12 @@ class RemoteEmbedding(BaseEmbedding):
         # 缓存命中
         if cache_key in self._query_cache:
             self._query_cache.move_to_end(cache_key)  # 刷新为最近使用
+            RemoteEmbedding._cache_hits += 1
             logger.debug(f"Embedding cache HIT: {cache_key[:30]}...")
             return self._query_cache[cache_key]
 
         # 缓存未命中 → 调用远程 API
+        RemoteEmbedding._cache_misses += 1
         try:
             res = self.client.embeddings.create(
                 input=[text],
@@ -102,3 +106,13 @@ class RemoteEmbedding(BaseEmbedding):
             self._query_cache.popitem(last=False)
 
         return result
+
+    @classmethod
+    def cache_stats(cls) -> dict:
+        """返回缓存命中率统计"""
+        total = cls._cache_hits + cls._cache_misses
+        return {
+            "hits": cls._cache_hits,
+            "misses": cls._cache_misses,
+            "hit_rate": f"{cls._cache_hits / total:.1%}" if total else "N/A",
+        }

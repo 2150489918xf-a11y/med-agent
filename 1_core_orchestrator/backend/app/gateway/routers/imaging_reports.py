@@ -102,10 +102,8 @@ async def submit_doctor_review(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read report: {e}")
 
-    if data.get("status") == "reviewed":
-        raise HTTPException(status_code=409, detail="Report already reviewed")
-
-    # Update with doctor's modifications
+    # Support re-edit: increment version instead of rejecting already-reviewed reports
+    data["version"] = data.get("version", 0) + 1
     data["status"] = "reviewed"
     data["doctor_result"] = submission.doctor_result
 

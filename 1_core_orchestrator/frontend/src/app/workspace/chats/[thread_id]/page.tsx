@@ -3,7 +3,7 @@
 import { useCallback } from "react";
 
 import { type PromptInputMessage } from "@/components/ai-elements/prompt-input";
-import { ArtifactTrigger } from "@/components/workspace/artifacts";
+import { ArtifactTrigger, ImagingTrigger } from "@/components/workspace/artifacts";
 import {
   ChatBox,
   useSpecificChatMode,
@@ -71,9 +71,20 @@ export default function ChatPage() {
     await thread.stop();
   }, [thread]);
 
+  // Re-judge: inject a human message with updated evidence summary
+  const handleReJudge = useCallback(
+    (updatedSummary: string) => {
+      void sendMessage(threadId, {
+        text: `[系统通知] 医生已修改影像分析结果。\n\n更新后的影像报告摘要：\n${updatedSummary}\n\n请结合之前的化验单和病历分析，重新给出综合诊断意见。未修改的证据维持原判断，仅更新影像相关部分。`,
+        files: [],
+      });
+    },
+    [sendMessage, threadId],
+  );
+
   return (
     <ThreadContext.Provider value={{ thread, isMock }}>
-      <ChatBox threadId={threadId}>
+      <ChatBox threadId={threadId} onReJudge={handleReJudge}>
         <div className="relative flex size-full min-h-0 justify-between">
           <header
             className={cn(
@@ -89,6 +100,7 @@ export default function ChatPage() {
             <div className="flex items-center gap-2">
               <TokenUsageIndicator messages={thread.messages} />
               <ExportTrigger threadId={threadId} />
+              <ImagingTrigger />
               <ArtifactTrigger />
             </div>
           </header>

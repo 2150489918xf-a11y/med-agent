@@ -7,7 +7,9 @@ Agent Tool API — 供外部 Agent 调用的检索工具接口
   POST /api/tool/retrieve  — 核心检索 (fast/hybrid/deep 三种模式)
   GET  /api/tool/list_kbs   — 列出可用知识库
   GET  /api/tool/schema     — 返回 OpenAI Function Calling JSON Schema
+  GET  /api/tool/perf       — 返回各阶段性能统计
 """
+import asyncio
 import logging
 import time
 
@@ -22,6 +24,7 @@ from api.models import (
     ToolSource, ToolMetadata,
 )
 from api.errors import ValidationError, ok_response
+from common.perf import perf
 from rag.nlp.search import index_name
 
 logger = logging.getLogger(__name__)
@@ -112,6 +115,12 @@ async def list_kbs():
         return ok_response({"knowledgebases": []})
 
 
+@router.get("/perf")
+async def get_perf_stats():
+    """返回各阶段性能统计 (P50/P95/avg)"""
+    return ok_response(perf.get_stats())
+
+
 @router.post("/retrieve", response_model=ToolRetrieveResponse)
 async def tool_retrieve(req: ToolRetrieveRequest):
     """
@@ -121,6 +130,8 @@ async def tool_retrieve(req: ToolRetrieveRequest):
       fast   → ES 混合检索 + Reranker
       hybrid → fast + GraphRAG 图谱推理
       deep   → hybrid + CRAG 纠错路由
+
+    优化: hybrid/deep 模式下，ES+Reranker 分支与 GraphRAG 分支并行执行。
     """
     t0 = time.perf_counter()
 
@@ -160,56 +171,75 @@ async def tool_retrieve(req: ToolRetrieveRequest):
 
     dealer = get_dealer()
     emb_mdl = get_emb()
-    import asyncio
 
-    # ── Step 1: ES 混合检索 ──
-    es_result = await dealer.retrieval(
-        question=req.query,
-        embd_mdl=emb_mdl,
-        kb_ids=kb_ids,
-        page=1,
-        page_size=req.top_k * 3,
-        similarity_threshold=0.1,
-        vector_similarity_weight=0.3,
-        highlight=False,
-        query_enhancer=get_query_enhancer(),
-    )
-    chunks = es_result.get("chunks", [])
-    total = es_result.get("total", 0)
+    # ══════════════════════════════════════════
+    #  分支 A: ES 混合检索 + Reranker 精排
+    # ══════════════════════════════════════════
+    async def _es_reranker_branch() -> tuple[list, int]:
+        with perf.timer("es_retrieval"):
+            es_result = await dealer.retrieval(
+                question=req.query,
+                embd_mdl=emb_mdl,
+                kb_ids=kb_ids,
+                page=1,
+                page_size=req.top_k * 3,
+                similarity_threshold=0.1,
+                vector_similarity_weight=0.3,
+                highlight=False,
+                query_enhancer=get_query_enhancer(),
+            )
+        _chunks = es_result.get("chunks", [])
+        _total = es_result.get("total", 0)
 
-    # ── Step 2: Reranker 精排 (含置信度短路) ──
-    fast_path = chunks and chunks[0].get("similarity", 0) > 0.85
+        # Reranker 置信度短路
+        fast_path = _chunks and _chunks[0].get("similarity", 0) > 0.85
+        reranker = get_reranker()
+        with perf.timer("reranker"):
+            if reranker and _chunks and not fast_path:
+                try:
+                    _chunks = reranker.rerank_chunks(req.query, _chunks, top_n=req.top_k)
+                except Exception as e:
+                    logger.warning(f"Reranker failed: {e}")
+                    _chunks = _chunks[:req.top_k]
+            else:
+                if fast_path:
+                    logger.info(f"Reranker fast-path: top similarity={_chunks[0].get('similarity', 0):.3f} > 0.85, skipping")
+                _chunks = _chunks[:req.top_k]
+        return _chunks, _total
 
-    reranker = get_reranker()
-    if reranker and chunks and not fast_path:
+    # ══════════════════════════════════════════
+    #  分支 B: GraphRAG 图谱推理 (仅 hybrid/deep)
+    # ══════════════════════════════════════════
+    async def _graph_branch() -> str:
+        if mode not in ("hybrid", "deep"):
+            return ""
+        gs = get_graph_searcher()
+        if not gs:
+            return ""
         try:
-            chunks = reranker.rerank_chunks(req.query, chunks, top_n=req.top_k)
+            with perf.timer("graph_rewrite"):
+                qa = await gs.rewrite_query(req.query)
+            if not qa:
+                return ""
+            with perf.timer("graph_search"):
+                graph_result = await gs.search_with_qa(
+                    question=req.query, kb_ids=kb_ids, qa=qa,
+                    topk_entity=20, topk_relation=30, n_hops=2,
+                )
+            return graph_result.formatted_context
         except Exception as e:
-            logger.warning(f"Reranker failed: {e}")
-            chunks = chunks[:req.top_k]
-    else:
-        if fast_path:
-            logger.info(f"Reranker fast-path: top similarity={chunks[0].get('similarity', 0):.3f} > 0.85, skipping reranker")
-        chunks = chunks[:req.top_k]
+            logger.warning(f"GraphRAG failed: {e}")
+            return ""
 
-    graph_context = ""
+    # ── 并行执行两条分支 ──
+    with perf.timer("parallel_total"):
+        (chunks, total), graph_context = await asyncio.gather(
+            _es_reranker_branch(),
+            _graph_branch(),
+        )
+
     crag_score = ""
     crag_reason = ""
-
-    # ── Step 3: GraphRAG (hybrid / deep) ──
-    if mode in ("hybrid", "deep"):
-        gs = get_graph_searcher()
-        if gs:
-            try:
-                qa = await gs.rewrite_query(req.query)
-                if qa:
-                    graph_result = await gs.search_with_qa(
-                        question=req.query, kb_ids=kb_ids, qa=qa,
-                        topk_entity=20, topk_relation=30, n_hops=2,
-                    )
-                    graph_context = graph_result.formatted_context
-            except Exception as e:
-                logger.warning(f"GraphRAG failed: {e}")
 
     # ── Step 4: CRAG (deep only, 含超时保护) ──
     crag_action = ""
@@ -219,15 +249,16 @@ async def tool_retrieve(req: ToolRetrieveRequest):
             from rag.settings import get_config
             crag_timeout = get_config().get("crag", {}).get("timeout_seconds", 2.5)
             try:
-                crag_result = await asyncio.wait_for(
-                    crag.route(
-                        question=req.query,
-                        local_chunks=chunks,
-                        graph_context=graph_context,
-                        enable_web_search=req.enable_web_search,
-                    ),
-                    timeout=crag_timeout,
-                )
+                with perf.timer("crag"):
+                    crag_result = await asyncio.wait_for(
+                        crag.route(
+                            question=req.query,
+                            local_chunks=chunks,
+                            graph_context=graph_context,
+                            enable_web_search=req.enable_web_search,
+                        ),
+                        timeout=crag_timeout,
+                    )
                 chunks = crag_result["chunks"]
                 graph_context = crag_result["graph_context"]
                 crag_score = crag_result["crag_score"]
