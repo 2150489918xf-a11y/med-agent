@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.gateway.config import get_gateway_config
 from app.gateway.routers import (
+    appointment,
     artifacts,
     cases,
     imaging_reports,
@@ -174,6 +175,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     app.include_router(imaging_reports.router)
     app.include_router(settings_api.router)
     app.include_router(knowledge_proxy.router)
+    app.include_router(appointment.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:

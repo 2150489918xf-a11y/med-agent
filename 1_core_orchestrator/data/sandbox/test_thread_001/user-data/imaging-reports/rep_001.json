@@ -1,0 +1,1 @@
+{"report_id": "rep_001", "thread_id": "test_thread_001", "image_path": "test.jpg", "status": "pending_review", "ai_result": {"finding": "Normal", "box": [0, 0, 10, 10]}}

@@ -33,6 +33,7 @@ import { humanMessagePlugins } from "@/core/streamdown";
 import { cn } from "@/lib/utils";
 
 import { CopyButton } from "../copy-button";
+import { AppointmentPreview } from "../AppointmentPreview";
 
 import { MarkdownContent } from "./markdown-content";
 
@@ -209,6 +210,40 @@ function MessageContent_({
           </AIElementMessageContent>
         )}
       </div>
+    );
+  }
+
+  // [ADR-021] Detect appointment_preview JSON in AI messages and render interactive card
+  const appointmentPreviewData = useMemo(() => {
+    if (isHuman || !contentToDisplay) return null;
+    // Check if the content is a JSON object with type=appointment_preview
+    const trimmed = contentToDisplay.trim();
+    if (trimmed.startsWith("{") && trimmed.includes('"appointment_preview"')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed.type === "appointment_preview") return parsed;
+      } catch {
+        // Not JSON, fall through to normal rendering
+      }
+    }
+    // Also check if the content contains embedded JSON (Agent may add text around it)
+    const jsonMatch = trimmed.match(/\{[\s\S]*"type"\s*:\s*"appointment_preview"[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.type === "appointment_preview") return parsed;
+      } catch {
+        // Not valid JSON
+      }
+    }
+    return null;
+  }, [contentToDisplay, isHuman]);
+
+  if (appointmentPreviewData) {
+    return (
+      <AIElementMessageContent className={className}>
+        <AppointmentPreview data={appointmentPreviewData} />
+      </AIElementMessageContent>
     );
   }
 

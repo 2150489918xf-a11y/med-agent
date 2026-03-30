@@ -124,24 +124,40 @@ interface SketchStroke {
   width: number;
 }
 
-export function ImagingViewer({ threadId, mcpResult }: { threadId?: string, mcpResult?: McpAnalysisResult }) {
-  const [data, setData] = useState<McpAnalysisResult | null>(mcpResult || null);
-  const [reportId, setReportId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(!mcpResult && !!threadId);
+export function ImagingViewer({ 
+  threadId, 
+  mcpResult,
+  reportId: propReportId,
+  imagePath: propImagePath,
+  initialStructuredData
+}: { 
+  threadId?: string, 
+  mcpResult?: McpAnalysisResult,
+  reportId?: string,
+  imagePath?: string,
+  initialStructuredData?: any
+}) {
+  const [data, setData] = useState<McpAnalysisResult | null>(
+    mcpResult || (propImagePath ? { image_path: propImagePath, findings: initialStructuredData?.findings || [] } : null)
+  );
+  const [reportId, setReportId] = useState<string | null>(propReportId || null);
+  const [isLoading, setIsLoading] = useState(!mcpResult && !initialStructuredData && !!threadId);
 
   // State
   const [findings, setFindings] = useState<Finding[]>(data?.findings || []);
 
   useEffect(() => {
-    if (!threadId || mcpResult) return;
+    // If we have data directly from props, don't fetch from DB.
+    if (initialStructuredData || mcpResult || !threadId) return;
+
     setIsLoading(true);
     import("@/core/config").then(({ getBackendBaseURL }) => {
       fetch(`${getBackendBaseURL()}/api/threads/${threadId}/imaging-reports`)
         .then(r => r.json())
         .then(d => {
           if (d.reports && d.reports.length > 0) {
-            // Sort to get newest first if there are multiple, or just take the first one
-            const report = d.reports[0];
+            // Find the exact report if passed, else just first one
+            const report = (propReportId) ? d.reports.find((r: any) => r.report_id === propReportId) || d.reports[0] : d.reports[0];
             setReportId(report.report_id);
             const analyzedResult = report.doctor_result || report.ai_result || {};
             const parsedData = {
@@ -156,7 +172,7 @@ export function ImagingViewer({ threadId, mcpResult }: { threadId?: string, mcpR
         })
         .finally(() => setIsLoading(false));
     });
-  }, [threadId, mcpResult]);
+  }, [threadId, mcpResult, initialStructuredData, propReportId]);
 
   const [activeTool, setActiveTool] = useState<ToolMode>("pan");
   const [zoom, setZoom] = useState(100);

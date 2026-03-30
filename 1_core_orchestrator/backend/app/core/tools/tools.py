@@ -6,7 +6,10 @@ from app.core.config import get_app_config
 from app.core.reflection import resolve_variable
 # [P0-DISABLED] view_image_tool 已停用。P3阶段取消注释恢复。
 # from app.core.tools.builtins import ask_clarification_tool, present_file_tool, view_image_tool
-from app.core.tools.builtins import ask_clarification_tool, present_file_tool, save_analysis_result_tool
+from app.core.tools.builtins import ask_clarification_tool, present_file_tool
+from app.core.tools.builtins.update_patient_info import update_patient_info_tool
+from app.core.tools.builtins.preview_appointment import preview_appointment_tool
+from app.core.tools.builtins.schedule_appointment import schedule_appointment_tool
 from app.core.tools.builtins.rag_retrieve import rag_retrieve_tool
 from app.core.tools.builtins.tool_search import reset_deferred_registry
 
@@ -15,8 +18,12 @@ logger = logging.getLogger(__name__)
 BUILTIN_TOOLS = [
     present_file_tool,
     ask_clarification_tool,
-    save_analysis_result_tool,  # [Phase7] 非阻塞异步存储，替代旧的 submit_for_review
-    rag_retrieve_tool,          # [ADR-014] 知识库检索 (RAGFlow Lite)
+    # [ADR-021] save_analysis_result_tool 已移除。
+    # 影像分析结果由上传管线 (uploads.py) 自动写入沙箱，不再需要 Agent 手动调用。
+    update_patient_info_tool,       # 患者信息提取（仅写沙箱暂存）
+    preview_appointment_tool,       # [ADR-021] 挂号预览（读沙箱 → 返回确认卡片数据）
+    schedule_appointment_tool,      # [ADR-020] 挂号签发（降级兜底，前端渲染异常时使用）
+    rag_retrieve_tool,              # [ADR-014] 知识库检索 (RAGFlow Lite)
 ]
 
 SUBAGENT_TOOLS = [

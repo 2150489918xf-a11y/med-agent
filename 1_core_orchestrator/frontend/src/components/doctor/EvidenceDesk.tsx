@@ -47,8 +47,19 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
   const patientSex = caseData?.patient_info?.sex ?? "男";
   const evidenceItems = caseData?.evidence ?? [];
 
-  // Per-item review tracking
-  const ALL_TABS = ["vitals", "imaging", "imaging_2", "labs", "lab_2", "lab_3"];
+  // Create dynamic ALL_TABS from evidence Items
+  const ALL_TABS: { id: string, label: string, type: string, item?: any }[] = [
+    { id: "vitals", label: "基础体征与历史", type: "vitals" }
+  ];
+  evidenceItems.forEach((ev: any, i: number) => {
+    ALL_TABS.push({
+      id: `ev_${ev.evidence_id || i}`,
+      label: ev.title || `附加数据 ${i+1}`,
+      type: ev.type,
+      item: ev
+    });
+  });
+
   const [reviewedTabs, setReviewedTabs] = useState<Set<string>>(new Set());
   const toggleReviewed = (tabId: string) => {
     setReviewedTabs(prev => {
@@ -57,7 +68,33 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
       return next;
     });
   };
-  const allReviewed = ALL_TABS.every(t => reviewedTabs.has(t));
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleReviewPassClick = async () => {
+    if (!caseId) {
+      onReviewPass();
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const { getBackendBaseURL } = await import("@/core/config");
+      await fetch(`${getBackendBaseURL()}/api/cases/${caseId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "diagnosed" })
+      });
+      onReviewPass();
+    } catch (e) {
+      console.error("Failed to approve case", e);
+      onReviewPass();
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const allReviewed = ALL_TABS.every(t => reviewedTabs.has(t.id));
+  
+  const activeTabData = ALL_TABS.find(t => t.id === activeTab);
   
   // 提取一个公用的渲染左侧菜单按钮的小组件函数，保持代码整洁
   const renderTab = (id: string, label: string, Icon: React.ElementType, isAlert = false) => {
@@ -106,31 +143,30 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
         </div>
         
         <div className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
-          
           <div className="space-y-1">
             <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-3 ml-2 flex items-center justify-between">
               主病历数据 <span className="text-[9px] bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded mr-2">1</span>
             </div>
-            {renderTab("vitals", "基础体征与历史", User)}
-          </div>
-          
-          <div className="space-y-1">
-            <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-3 ml-2 flex items-center justify-between">
-              医学影像 <span className="text-[9px] bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded mr-2">2</span>
-            </div>
-            {renderTab("imaging", "胸部 X 光正侧位片", ImageIcon, true)}
-            {renderTab("imaging_2", "头颅 CT 平扫", ImageIcon)}
+            {ALL_TABS.filter(t => t.type === 'vitals').map(t => renderTab(t.id, t.label, User, false))}
           </div>
 
-          <div className="space-y-1">
-            <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-3 ml-2 flex items-center justify-between">
-              化验单与检查 <span className="text-[9px] bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded mr-2">3</span>
+          {ALL_TABS.filter(t => t.type === "imaging").length > 0 && (
+            <div className="space-y-1">
+              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-3 ml-2 flex items-center justify-between">
+                医学影像 <span className="text-[9px] bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded mr-2">{ALL_TABS.filter(t => t.type === "imaging").length}</span>
+              </div>
+              {ALL_TABS.filter(t => t.type === "imaging").map(t => renderTab(t.id, t.label, ImageIcon, t.item?.is_abnormal))}
             </div>
-            {renderTab("labs", "血液生化全项 (最新)", FileText, true)}
-            {renderTab("lab_2", "尿常规筛查", FileText)}
-            {renderTab("lab_3", "12导联静态心电图", Activity)}
-          </div>
+          )}
 
+          {ALL_TABS.filter(t => t.type === "lab" || t.type === "ecg" || t.type === "note").length > 0 && (
+            <div className="space-y-1">
+              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-3 ml-2 flex items-center justify-between">
+                化验单与检查 <span className="text-[9px] bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded mr-2">{ALL_TABS.filter(t => t.type === "lab" || t.type === "ecg" || t.type === "note").length}</span>
+              </div>
+              {ALL_TABS.filter(t => t.type === "lab" || t.type === "ecg" || t.type === "note").map(t => renderTab(t.id, t.label, FileText, t.item?.is_abnormal))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -180,19 +216,19 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
                   <div className="grid grid-cols-2 gap-3">
                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 relative overflow-hidden transition-colors focus-within:ring-2 focus-within:ring-blue-100 focus-within:bg-white">
                        <div className="text-[10px] text-slate-500 font-bold mb-1">体温 (°C)</div>
-                       <Input className="p-0 h-auto border-none bg-transparent shadow-none text-xl font-bold text-slate-800 focus-visible:ring-0 placeholder:text-slate-300 placeholder:font-normal" placeholder="未录入" defaultValue="" />
+                       <Input readOnly className="p-0 h-auto border-none bg-transparent shadow-none text-xl font-bold text-slate-800 focus-visible:ring-0 placeholder:text-slate-300 placeholder:font-normal" placeholder="未录入" value={caseData?.patient_info?.temperature || ""} />
                      </div>
                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 relative overflow-hidden transition-colors focus-within:ring-2 focus-within:ring-blue-100 focus-within:bg-white">
                        <div className="text-[10px] text-slate-500 font-bold mb-1">心率 (bpm)</div>
-                       <Input className="p-0 h-auto border-none bg-transparent shadow-none text-xl font-bold text-slate-800 focus-visible:ring-0 placeholder:text-slate-300 placeholder:font-normal" placeholder="未录入" defaultValue="" />
+                       <Input readOnly className="p-0 h-auto border-none bg-transparent shadow-none text-xl font-bold text-slate-800 focus-visible:ring-0 placeholder:text-slate-300 placeholder:font-normal" placeholder="未录入" value={caseData?.patient_info?.heart_rate || ""} />
                      </div>
                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 relative overflow-hidden transition-colors focus-within:ring-2 focus-within:ring-blue-100 focus-within:bg-white">
                        <div className="text-[10px] text-slate-500 font-bold mb-1">血压 (mmHg)</div>
-                       <Input className="p-0 h-auto border-none bg-transparent shadow-none text-xl font-bold text-slate-800 focus-visible:ring-0 placeholder:text-slate-300 placeholder:font-normal" placeholder="未录入" defaultValue="" />
+                       <Input readOnly className="p-0 h-auto border-none bg-transparent shadow-none text-xl font-bold text-slate-800 focus-visible:ring-0 placeholder:text-slate-300 placeholder:font-normal" placeholder="未录入" value={caseData?.patient_info?.blood_pressure || ""} />
                      </div>
                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 relative overflow-hidden transition-colors focus-within:ring-2 focus-within:ring-blue-100 focus-within:bg-white">
                        <div className="text-[10px] text-slate-500 font-bold mb-1">血氧 (SpO2%)</div>
-                       <Input className="p-0 h-auto border-none bg-transparent shadow-none text-xl font-bold text-slate-800 focus-visible:ring-0 placeholder:text-slate-300 placeholder:font-normal" placeholder="未录入" defaultValue="" />
+                       <Input readOnly className="p-0 h-auto border-none bg-transparent shadow-none text-xl font-bold text-slate-800 focus-visible:ring-0 placeholder:text-slate-300 placeholder:font-normal" placeholder="未录入" value={caseData?.patient_info?.spo2 || ""} />
                      </div>
                   </div>
                 </div>
@@ -202,35 +238,35 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
               <div className="flex-1 space-y-4">
                 <div className="border border-slate-200 bg-white p-5 rounded-2xl shadow-sm focus-within:ring-2 focus-within:ring-blue-100 transition-all">
                   <label className="text-sm font-medium text-slate-600 mb-3 block">主诉 (Chief Complaint)</label>
-                  <Textarea 
+                  <Textarea readOnly 
                     className="resize-none border-none shadow-none focus-visible:ring-0 p-0 text-slate-800 font-bold placeholder:text-slate-300 placeholder:font-normal min-h-[40px]"
                     placeholder="未记录 (N/A)"
-                    defaultValue="咳嗽。"
+                    value={caseData?.patient_info?.chief_complaint || ""}
                   />
                 </div>
                 <div className="border border-slate-200 bg-white p-5 rounded-2xl shadow-sm focus-within:ring-2 focus-within:ring-blue-100 transition-all">
                   <label className="text-sm font-medium text-slate-600 mb-3 block">现病史 (Present Illness)</label>
-                  <Textarea 
+                  <Textarea readOnly
                     className="resize-none border-none shadow-none focus-visible:ring-0 p-0 text-slate-800 font-bold placeholder:text-slate-300 placeholder:font-normal min-h-[60px]"
                     placeholder="未录入具体现病史... (N/A)"
-                    defaultValue=""
+                    value={caseData?.patient_info?.present_illness || ""}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="border border-slate-200 bg-white p-4 rounded-xl shadow-sm focus-within:ring-2 focus-within:ring-blue-100 transition-all">
                     <label className="text-sm font-medium text-slate-600 mb-2 block">既往史 (Medical History)</label>
-                    <Textarea 
+                    <Textarea readOnly
                       className="resize-none border-none shadow-none focus-visible:ring-0 p-0 text-sm text-slate-800 font-semibold placeholder:text-slate-300 placeholder:font-normal min-h-[40px]"
                       placeholder="未录入 (N/A)"
-                      defaultValue=""
+                      value={caseData?.patient_info?.medical_history || ""}
                     />
                   </div>
                   <div className="border border-slate-200 bg-white p-4 rounded-xl shadow-sm focus-within:ring-2 focus-within:ring-blue-100 transition-all">
                     <label className="text-sm font-medium text-amber-600 mb-2 block">过敏与用药 (Allergies/Meds)</label>
-                    <Textarea 
+                    <Textarea readOnly
                       className="resize-none border-none shadow-none focus-visible:ring-0 p-0 text-sm text-slate-800 font-semibold placeholder:text-amber-200 placeholder:font-normal min-h-[40px]"
                       placeholder="未明示 (N/A)"
-                      defaultValue=""
+                      value={caseData?.patient_info?.allergies || ""}
                     />
                   </div>
                 </div>
@@ -251,54 +287,28 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
           </div>
         )}
 
-        {activeTab === "imaging" && (
-          <ImagingViewer />
+        {activeTabData?.type === "imaging" && (
+          <ImagingViewer 
+             reportId={activeTabData.item?.evidence_id} 
+             threadId={caseData?.patient_thread_id}
+             imagePath={activeTabData.item?.file_path} 
+             initialStructuredData={activeTabData.item?.structured_data} 
+          />
         )}
 
-        {activeTab === "labs" && (
-          <div className="animate-in fade-in duration-300 flex flex-col p-8 h-full bg-white border border-slate-200 rounded-xl m-8 shadow-sm">
+        {(activeTabData?.type === "lab" || activeTabData?.type === "ecg" || activeTabData?.type === "note") && (
+          <div className="animate-in fade-in duration-300 flex flex-col p-8 h-full bg-white border border-slate-200 rounded-xl m-8 shadow-sm overflow-y-auto">
              <div className="flex justify-between items-center mb-6">
-               <h2 className="text-xl font-bold text-slate-800">血液生化全项分析</h2>
-               <span className="bg-red-50 text-red-600 text-xs font-bold px-2 py-1 rounded">存在异常项</span>
+               <h2 className="text-xl font-bold text-slate-800">{activeTabData.item?.title}</h2>
+               {activeTabData.item?.is_abnormal ? (
+                   <span className="bg-red-50 text-red-600 text-xs font-bold px-2 py-1 rounded">存在异常项</span>
+               ) : (
+                   <span className="bg-green-50 text-green-600 text-xs font-bold px-2 py-1 rounded">未见明显异常</span>
+               )}
              </div>
-             <table className="w-full text-sm text-left text-slate-600">
-                <thead className="text-xs text-slate-500 bg-slate-50 border-y border-slate-200">
-                    <tr><th className="px-4 py-3">项目 (Item)</th><th className="px-4 py-3">结果 (Result)</th><th className="px-4 py-3">参考范围 (Ref)</th></tr>
-                </thead>
-                <tbody>
-                    <tr className="border-b"><td className="px-4 py-3">白细胞计数 (WBC)</td><td className="px-4 py-3 text-red-600 font-bold">12.5 ↑</td><td className="px-4 py-3">4.0 - 10.0 x10^9/L</td></tr>
-                    <tr className="border-b bg-red-50/30"><td className="px-4 py-3">中性粒细胞比例 (NE%)</td><td className="px-4 py-3 text-red-600 font-bold">78.2% ↑</td><td className="px-4 py-3">40.0 - 75.0 %</td></tr>
-                    <tr className="border-b"><td className="px-4 py-3">血红蛋白 (HGB)</td><td className="px-4 py-3">135</td><td className="px-4 py-3">130 - 175 g/L</td></tr>
-                    <tr className="border-b"><td className="px-4 py-3">血清钾 (K+)</td><td className="px-4 py-3 text-amber-600 font-bold">3.2 ↓</td><td className="px-4 py-3">3.5 - 5.5 mmol/L</td></tr>
-                </tbody>
-             </table>
-          </div>
-        )}
-
-        {/* MOCK: 其他占位符 */}
-        {activeTab === "imaging_2" && (
-          <div className="animate-in fade-in duration-300 flex flex-col items-center justify-center h-full text-slate-400">
-            <ImageIcon className="w-16 h-16 mb-4 opacity-50" />
-            <p className="font-semibold text-lg text-slate-600">头颅 CT 平扫展示区</p>
-            <p className="text-sm mt-2">暂无未处理异常，AI未检出出血点或占位。</p>
-          </div>
-        )}
-
-        {activeTab === "lab_2" && (
-          <div className="animate-in fade-in duration-300 flex flex-col items-center justify-center h-full text-slate-400">
-            <FileText className="w-16 h-16 mb-4 opacity-50" />
-            <p className="font-semibold text-lg text-slate-600">尿常规筛查报告</p>
-            <p className="text-sm mt-2">各项指标正常</p>
-          </div>
-        )}
-
-        {activeTab === "lab_3" && (
-          <div className="animate-in fade-in duration-300 flex flex-col items-center justify-center h-full text-slate-400">
-             <Activity className="w-16 h-16 mb-4 opacity-50" />
-             <p className="font-semibold text-lg text-slate-600">12导联静态心电图</p>
-             <p className="text-sm mt-2 border border-slate-200 bg-slate-50 p-4 rounded-lg text-slate-500 mt-6 shadow-sm">
-                正常窦性心律，心率 88 bpm。无明显 S-T 段压低或抬高。
-             </p>
+             <div className="bg-slate-50 p-6 rounded-lg border border-slate-100 whitespace-pre-wrap text-sm text-slate-700 font-mono">
+                {activeTabData.item?.ai_analysis || (activeTabData.item?.structured_data ? JSON.stringify(activeTabData.item?.structured_data, null, 2) : "无详细报告数据")}
+             </div>
           </div>
         )}
         </div>
@@ -312,25 +322,25 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
            <div className="flex items-center gap-3">
              <div className="flex items-center gap-1">
                {ALL_TABS.map(t => (
-                 <div key={t} className={cn("w-2 h-2 rounded-full transition-colors", reviewedTabs.has(t) ? "bg-emerald-500" : "bg-slate-200")} />
+                 <div key={t.id} className={cn("w-2 h-2 rounded-full transition-colors", reviewedTabs.has(t.id) ? "bg-emerald-500" : "bg-slate-200")} />
                ))}
              </div>
              <Button 
                 size="lg"
-                onClick={onReviewPass}
+                onClick={handleReviewPassClick}
                 className={cn(
                   "px-8 py-6 text-lg tracking-wide rounded-full font-semibold transition-all shadow-md",
-                  isReviewPassed 
+                  (isReviewPassed || isSubmitting)
                     ? "bg-slate-200 text-slate-400 cursor-not-allowed hover:bg-slate-200" 
                     : allReviewed
                       ? "bg-green-600 text-white hover:bg-green-700 hover:shadow-lg hover:-translate-y-0.5"
                       : "bg-slate-300 text-slate-500 cursor-not-allowed hover:bg-slate-300"
                 )}
-                disabled={isReviewPassed || !allReviewed}
+                disabled={isReviewPassed || !allReviewed || isSubmitting}
               >
                <ShieldCheck className="mr-2 h-5 w-5" />
-               {isReviewPassed ? "证据链已锁定 (Locked)" : allReviewed ? "确认人工审核完成" : `还有 ${ALL_TABS.length - reviewedTabs.size} 项未审核`}
-             </Button>
+               {isSubmitting ? "正在归档..." : isReviewPassed ? "证据链已锁定 (Locked)" : allReviewed ? "确认人工审核完成" : `还有 ${ALL_TABS.length - reviewedTabs.size} 项未审核`}
+              </Button>
            </div>
         </div>
       </div>

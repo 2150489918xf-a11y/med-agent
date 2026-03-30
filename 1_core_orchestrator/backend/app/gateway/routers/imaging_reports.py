@@ -15,6 +15,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from deerflow.config.paths import get_paths
+from app.gateway.services.case_db import (
+    sync_report_from_file,
+    get_reports_by_thread,
+    get_report_by_id,
+    update_report,
+    get_case_by_thread,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,49 +46,57 @@ class DoctorReviewSubmission(BaseModel):
 
 
 @router.get("")
-async def list_imaging_reports(
+def list_imaging_reports(
     thread_id: str,
     status: str | None = None,
 ):
     """List imaging reports, optionally filtered by status.
 
+    [ADR-020] Only sync and return reports if the patient has a formal Case
+    (i.e., has confirmed scheduling). Otherwise return empty to prevent
+    sandbox data from leaking into the EMR database.
+
     Query params:
         status: Filter by report status (e.g., 'pending_review', 'reviewed')
     """
-    reports_dir = _get_reports_dir(thread_id)
-    reports = []
+    # Gate: only allow access if patient has been formally registered
+    if not get_case_by_thread(thread_id):
+        return {"reports": [], "total": 0}
 
+    reports_dir = _get_reports_dir(thread_id)
+    
+    # 1. Sync any stray JSON files into DB
     for report_file in sorted(reports_dir.glob("*.json")):
-        try:
-            data = json.loads(report_file.read_text(encoding="utf-8"))
-            if status and data.get("status") != status:
-                continue
-            reports.append(data)
-        except Exception as e:
-            logger.warning(f"Failed to read report {report_file}: {e}")
-            continue
+        sync_report_from_file(thread_id, report_file)
+            
+    # 2. Fetch from DB
+    reports = get_reports_by_thread(thread_id, status)
 
     return {"reports": reports, "total": len(reports)}
 
 
 @router.get("/{report_id}")
-async def get_imaging_report(thread_id: str, report_id: str):
+def get_imaging_report(thread_id: str, report_id: str):
     """Get a specific imaging report by ID."""
+    # Gate: only allow access if patient has been formally registered
+    if not get_case_by_thread(thread_id):
+        raise HTTPException(status_code=404, detail="No registered case for this thread")
+
     reports_dir = _get_reports_dir(thread_id)
     report_file = reports_dir / f"{report_id}.json"
 
-    if not report_file.exists():
+    if report_file.exists():
+        sync_report_from_file(thread_id, report_file)
+
+    report = get_report_by_id(report_id)
+    if not report:
         raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
 
-    try:
-        data = json.loads(report_file.read_text(encoding="utf-8"))
-        return data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return report
 
 
 @router.put("/{report_id}")
-async def submit_doctor_review(
+def submit_doctor_review(
     thread_id: str,
     report_id: str,
     submission: DoctorReviewSubmission,
@@ -95,8 +110,21 @@ async def submit_doctor_review(
     report_file = reports_dir / f"{report_id}.json"
 
     if not report_file.exists():
-        raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+        raise HTTPException(status_code=404, detail=f"Report file {report_id}.json not found in sandbox")
 
+    # 1. Sync file to ensure it exists in DB
+    sync_report_from_file(thread_id, report_file)
+
+    # 2. Update DB and log audit (Option A: Snapshot)
+    updated_report = update_report(report_id, submission.doctor_result)
+    if not updated_report:
+        raise HTTPException(status_code=500, detail="Failed to update report in database")
+
+    # [P1 Sync] Sync to cases table macro evidence array
+    from app.gateway.services.case_db import update_case_evidence_from_report
+    update_case_evidence_from_report(thread_id, report_id, submission.doctor_result)
+
+    # 3. Write back to sandbox file to unblock the Agent Tool
     try:
         data = json.loads(report_file.read_text(encoding="utf-8"))
     except Exception as e:
@@ -112,8 +140,8 @@ async def submit_doctor_review(
         encoding="utf-8",
     )
 
-    logger.info(f"[HITL] Report {report_id} reviewed by doctor")
-    return {"status": "ok", "report_id": report_id}
+    logger.info(f"[HITL] Report {report_id} reviewed by doctor and synced to DB")
+    return {"status": "ok", "report_id": report_id, "data": updated_report}
 
 
 class GenerateDraftRequest(BaseModel):

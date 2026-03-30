@@ -61,8 +61,17 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                 lines.append(f"  Path: {file['path']}")
                 if file.get("image_type"):
                     lines.append(f"  图片类型: {file['image_type']}")
+                if file.get("image_confidence"):
+                    lines.append(f"  分类置信度: {file['image_confidence']}")
                 if file.get("enhanced_path"):
                     lines.append(f"  增强版路径: {file['enhanced_path']}")
+                # [ADR-021] 注入 MCP 分析状态
+                if file.get("mcp_analysis_status"):
+                    lines.append(f"  mcp_analysis_status: {file['mcp_analysis_status']}")
+                if file.get("mcp_findings_count"):
+                    lines.append(f"  mcp_findings_count: {file['mcp_findings_count']}")
+                if file.get("mcp_findings_brief"):
+                    lines.append(f"  mcp_findings_brief: {file['mcp_findings_brief']}")
                 if file.get("ocr_text"):
                     lines.append(f"\n{file['ocr_text']}")
                 lines.append("")
@@ -200,6 +209,8 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                         meta = json.loads(meta_file.read_text(encoding="utf-8"))
                         if "image_type" in meta:
                             f["image_type"] = meta["image_type"]
+                        if "image_confidence" in meta:
+                            f["image_confidence"] = str(meta["image_confidence"])
                     except Exception as e:
                         logger.warning(f"Failed to read meta sidecar for {f['filename']}: {e}")
 
@@ -207,6 +218,42 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                 if sidecar.exists():
                     f["ocr_text"] = sidecar.read_text(encoding="utf-8")
                     f["image_type"] = "lab_report"
+
+        # [ADR-021] 扫描 imaging-reports/ 目录，将 MCP 分析摘要注入到对应文件
+        if thread_id:
+            import json as _json
+            reports_dir = self._paths.sandbox_user_data_dir(thread_id) / "imaging-reports"
+            if reports_dir.exists():
+                all_files = (new_files or []) + historical_files
+                for report_file in sorted(reports_dir.glob("*.json")):
+                    try:
+                        report_data = _json.loads(report_file.read_text(encoding="utf-8"))
+                        image_path = report_data.get("image_path", "")
+                        ai_result = report_data.get("ai_result", {})
+
+                        # 匹配报告对应的上传文件（按文件名后缀匹配）
+                        for f in all_files:
+                            real_path = f.get("real_path", "")
+                            if real_path and image_path and (
+                                real_path.replace("\\", "/").endswith(f["filename"]) or
+                                image_path.replace("\\", "/").endswith(f["filename"])
+                            ):
+                                # 注入分析摘要
+                                f["mcp_analysis_status"] = report_data.get("status", "pending_review")
+                                summary = ai_result.get("summary", {})
+                                total = summary.get("total_findings", 0)
+                                f["mcp_findings_count"] = str(total)
+                                # 注入关键发现的简短描述（供 Agent 快速阅读）
+                                if total > 0:
+                                    findings = ai_result.get("findings", [])
+                                    brief = "; ".join(
+                                        fd.get("label", fd.get("class", "unknown"))
+                                        for fd in findings[:5]  # 最多列出前5个发现
+                                    ) if isinstance(findings, list) else str(total) + " findings"
+                                    f["mcp_findings_brief"] = brief
+                                break
+                    except Exception as e:
+                        logger.warning(f"Failed to read imaging report {report_file.name}: {e}")
 
         if not new_files and not historical_files:
             return None

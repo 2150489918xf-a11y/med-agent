@@ -117,6 +117,7 @@ class CreateCaseRequest(BaseModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
 
 class AddEvidenceRequest(BaseModel):
+    evidence_id: str | None = None
     type: Literal["vitals", "imaging", "lab", "ecg", "note"]
     title: str
     source: Literal["patient_upload", "ai_generated", "doctor_input"] = "patient_upload"
@@ -135,3 +136,22 @@ class SubmitDiagnosisRequest(BaseModel):
 
 class UpdateStatusRequest(BaseModel):
     status: CaseStatus
+
+
+class UpdatePatientInfoRequest(BaseModel):
+    """Doctor-side patient info update (partial update supported)."""
+    name: str | None = None
+    age: int | None = None
+    sex: str | None = None
+    phone: str | None = None
+    chief_complaint: str | None = None
+    present_illness: str | None = None
+    medical_history: str | None = None
+    allergies: str | None = None
+    height_cm: float | None = None
+    weight_kg: float | None = None
+    temperature: float | None = None
+    heart_rate: int | None = None
+    blood_pressure: str | None = None
+    spo2: float | None = None
+

@@ -66,6 +66,31 @@ def _get_conn() -> sqlite3.Connection:
     _conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_cases_priority ON cases(priority)
     """)
+    
+    # P0: Hitl Imaging Reports Persistence
+    _conn.execute("""
+        CREATE TABLE IF NOT EXISTS reports (
+            report_id          TEXT PRIMARY KEY,
+            patient_thread_id  TEXT NOT NULL,
+            image_path         TEXT NOT NULL,
+            ai_result          TEXT NOT NULL,
+            doctor_result      TEXT,
+            status             TEXT NOT NULL DEFAULT 'pending_review',
+            created_at         TEXT NOT NULL,
+            updated_at         TEXT NOT NULL
+        )
+    """)
+    _conn.execute("""
+        CREATE TABLE IF NOT EXISTS report_audit_log (
+            audit_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id          TEXT NOT NULL,
+            doctor_id          TEXT,
+            action             TEXT NOT NULL,
+            old_value          TEXT,
+            new_value          TEXT,
+            created_at         TEXT NOT NULL
+        )
+    """)
     _conn.commit()
     logger.info(f"Case DB initialized at {_DB_PATH}")
     return _conn
@@ -197,6 +222,9 @@ def add_evidence(case_id: str, req: AddEvidenceRequest) -> Case | None:
         ai_analysis=req.ai_analysis,
         is_abnormal=req.is_abnormal,
     )
+    if req.evidence_id:
+        item.evidence_id = req.evidence_id
+
     case.evidence.append(item)
     case.updated_at = datetime.now(timezone.utc)
 
@@ -208,6 +236,109 @@ def add_evidence(case_id: str, req: AddEvidenceRequest) -> Case | None:
         )
         conn.commit()
     return case
+
+
+def update_patient_info(thread_id: str, info_dict: dict) -> Case | None:
+    """Update patient info on an existing Case. Returns None if no Case exists.
+    
+    [ADR-020] No longer auto-creates a Case. Case creation is exclusively
+    handled by the schedule_appointment tool when the patient confirms.
+    """
+    target_case = get_case_by_thread(thread_id)
+    
+    if not target_case:
+        # No case exists yet — patient hasn't confirmed scheduling
+        return None
+        
+    # Update existing case
+    info_model = target_case.patient_info
+    for k, v in info_dict.items():
+        if hasattr(info_model, k) and v is not None:
+            setattr(info_model, k, v)
+            
+    target_case.updated_at = datetime.now(timezone.utc)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "UPDATE cases SET data = ?, updated_at = ? WHERE case_id = ?",
+            (target_case.model_dump_json(), target_case.updated_at.isoformat(), target_case.case_id),
+        )
+        conn.commit()
+    return target_case
+
+
+def update_patient_info_by_case(case_id: str, info_dict: dict) -> Case | None:
+    """Update patient info on an existing Case by case_id (doctor-side).
+    
+    Unlike update_patient_info() which uses thread_id, this version is used
+    by the doctor workbench to directly edit patient data on an existing case.
+    Only non-None fields in info_dict are applied (partial update).
+    """
+    case = get_case(case_id)
+    if not case:
+        return None
+    
+    info_model = case.patient_info
+    for k, v in info_dict.items():
+        if hasattr(info_model, k) and v is not None:
+            setattr(info_model, k, v)
+    
+    case.updated_at = datetime.now(timezone.utc)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "UPDATE cases SET data = ?, updated_at = ? WHERE case_id = ?",
+            (case.model_dump_json(), case.updated_at.isoformat(), case_id),
+        )
+        conn.commit()
+    return case
+
+
+def get_case_by_thread(thread_id: str) -> Case | None:
+    """Find the active Case for a given patient thread_id.
+    
+    Used by route guards and the schedule_appointment tool to check
+    whether a formal Case already exists for this conversation thread.
+    """
+    with _lock:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT data FROM cases WHERE patient_thread_id = ? LIMIT 1",
+            (thread_id,)
+        ).fetchone()
+    if row:
+        return Case.model_validate_json(row[0])
+    return None
+
+
+def update_case_evidence_from_report(thread_id: str, report_id: str, doctor_result: dict) -> bool:
+    """Sync the doctor's review back to the macro Case.evidence array."""
+    target_case = get_case_by_thread(thread_id)
+    
+    if not target_case:
+        return False
+        
+    updated = False
+    for item in target_case.evidence:
+        if item.evidence_id == report_id:
+            # Reconstruct the structured data from the doctor result
+            if item.structured_data is None:
+                item.structured_data = {}
+            # Update specific keys from doctor_result
+            item.structured_data.update(doctor_result)
+            updated = True
+            
+    if updated:
+        target_case.updated_at = datetime.now(timezone.utc)
+        with _lock:
+            conn = _get_conn()
+            conn.execute(
+                "UPDATE cases SET data = ?, updated_at = ? WHERE case_id = ?",
+                (target_case.model_dump_json(), target_case.updated_at.isoformat(), target_case.case_id),
+            )
+            conn.commit()
+        return True
+    return False
 
 
 def submit_diagnosis(case_id: str, req: SubmitDiagnosisRequest) -> Case | None:
@@ -286,3 +417,125 @@ def get_stats() -> dict:
         "top_diagnoses": [{"name": k, "count": v} for k, v in top_diagnoses],
     }
 
+
+# ── Rerports & HITL Audit ─────────────────────────────────
+
+def sync_report_from_file(thread_id: str, file_path: Path) -> dict | None:
+    """Sync a JSON file containing a report into the database."""
+    try:
+        data = json.loads(file_path.read_text(encoding="utf-8"))
+        report_id = data.get("report_id") or data.get("id")
+        if not report_id:
+            return None
+        
+        image_path = data.get("image_path", "")
+        status = data.get("status", "pending_review")
+        ai_result_str = json.dumps(data.get("ai_result", {}), ensure_ascii=False)
+        doc_result_raw = data.get("doctor_result")
+        doc_result_str = json.dumps(doc_result_raw, ensure_ascii=False) if doc_result_raw else None
+        now_str = datetime.now(timezone.utc).isoformat()
+        
+        with _lock:
+            conn = _get_conn()
+            # Insert if not exists
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO reports 
+                (report_id, patient_thread_id, image_path, ai_result, doctor_result, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (report_id, thread_id, image_path, ai_result_str, doc_result_str, status, now_str, now_str)
+            )
+            conn.commit()
+            
+            row = conn.execute("SELECT ai_result, doctor_result, status FROM reports WHERE report_id = ?", (report_id,)).fetchone()
+            
+        return {
+            "report_id": report_id,
+            "thread_id": thread_id,
+            "status": row[2] if row else status,
+            "image_path": image_path,
+            "ai_result": json.loads(row[0]) if row else data.get("ai_result"),
+            "doctor_result": json.loads(row[1]) if row and row[1] else doc_result_raw
+        }
+    except Exception as e:
+        logger.error(f"Failed to sync report {file_path}: {e}")
+        return None
+
+def get_reports_by_thread(thread_id: str, status: str | None = None) -> list[dict]:
+    """Get reports from the database."""
+    query = "SELECT report_id, image_path, ai_result, doctor_result, status, created_at FROM reports WHERE patient_thread_id = ?"
+    params = [thread_id]
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+        
+    query += " ORDER BY created_at DESC"
+    
+    with _lock:
+        conn = _get_conn()
+        rows = conn.execute(query, params).fetchall()
+        
+    reports = []
+    for row in rows:
+        reports.append({
+            "report_id": row[0],
+            "thread_id": thread_id,
+            "image_path": row[1],
+            "ai_result": json.loads(row[2]) if row[2] else {},
+            "doctor_result": json.loads(row[3]) if row[3] else None,
+            "status": row[4],
+            "created_at": row[5]
+        })
+    return reports
+
+def get_report_by_id(report_id: str) -> dict | None:
+    """Get a single report by ID from DB."""
+    with _lock:
+        conn = _get_conn()
+        row = conn.execute("SELECT patient_thread_id, image_path, ai_result, doctor_result, status, created_at FROM reports WHERE report_id = ?", (report_id,)).fetchone()
+        
+    if not row:
+        return None
+        
+    return {
+        "report_id": report_id,
+        "thread_id": row[0],
+        "image_path": row[1],
+        "ai_result": json.loads(row[2]) if row[2] else {},
+        "doctor_result": json.loads(row[3]) if row[3] else None,
+        "status": row[4],
+        "created_at": row[5]
+    }
+
+def update_report(report_id: str, doctor_result: dict, doctor_id: str = "unknown") -> dict | None:
+    """Update report with doctor modifications and trigger snapshot audit."""
+    existing_report = get_report_by_id(report_id)
+    if not existing_report:
+        return None
+        
+    # Capture old value for audit snapshot
+    old_value = existing_report["doctor_result"] if existing_report.get("doctor_result") else existing_report["ai_result"]
+    new_status = "reviewed"
+    
+    now_str = datetime.now(timezone.utc).isoformat()
+    old_value_str = json.dumps(old_value, ensure_ascii=False)
+    new_value_str = json.dumps(doctor_result, ensure_ascii=False)
+    
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "UPDATE reports SET doctor_result = ?, status = ?, updated_at = ? WHERE report_id = ?",
+            (new_value_str, new_status, now_str, report_id)
+        )
+        # Audit Log (Option A: whole snapshots)
+        conn.execute(
+            """
+            INSERT INTO report_audit_log (report_id, doctor_id, action, old_value, new_value, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (report_id, doctor_id, "update_report", old_value_str, new_value_str, now_str)
+        )
+        conn.commit()
+    
+    return get_report_by_id(report_id)

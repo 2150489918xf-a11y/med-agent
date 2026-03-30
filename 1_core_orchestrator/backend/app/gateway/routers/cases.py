@@ -26,6 +26,7 @@ from app.gateway.models.case import (
     CreateCaseRequest,
     Priority,
     SubmitDiagnosisRequest,
+    UpdatePatientInfoRequest,
     UpdateStatusRequest,
 )
 from app.gateway.services import case_db
@@ -103,6 +104,21 @@ async def update_case_status(case_id: str, req: UpdateStatusRequest):
         "case_id": case_id,
         "new_status": req.status.value,
     })
+    return case.model_dump()
+
+
+# ── Patient Info Editing ───────────────────────────────────
+
+@router.patch("/cases/{case_id}/patient-info")
+async def update_patient_info(case_id: str, req: UpdatePatientInfoRequest):
+    """Update patient demographics/vitals on an existing case (doctor-side)."""
+    info_dict = req.model_dump(exclude_none=True)
+    if not info_dict:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    case = case_db.update_patient_info_by_case(case_id, info_dict)
+    if case is None:
+        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+    _broadcast_event("patient_info_updated", {"case_id": case_id})
     return case.model_dump()
 
 

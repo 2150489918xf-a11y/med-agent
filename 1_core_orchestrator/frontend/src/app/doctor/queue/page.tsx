@@ -14,12 +14,17 @@ import {
   FileText,
   Activity,
   Inbox,
+  Upload,
+  Plus,
+  X,
+  Loader2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { Textarea } from "@/components/ui/textarea";
 
 // ── Types ─────────────────────────────────────────────────
 interface PatientInfo {
@@ -102,6 +107,15 @@ export default function DoctorQueuePage() {
   const [isLive, setIsLive] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
+  // ── New Case Dialog state ──
+  const [showNewCase, setShowNewCase] = useState(false);
+  const [newCaseForm, setNewCaseForm] = useState({
+    name: "", age: "", sex: "男", phone: "",
+    chief_complaint: "", present_illness: "",
+    priority: "medium",
+  });
+  const [isCreating, setIsCreating] = useState(false);
+
   // Fetch cases from API
   const loadCases = async () => {
     try {
@@ -171,6 +185,69 @@ export default function DoctorQueuePage() {
     router.push(`/doctor/chat/${caseItem.case_id}`);
   };
 
+  const uploadRef = React.useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = React.useState(false);
+
+  // Doctor-side upload handler: uploads file to a selected case's thread
+  const handleDoctorUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !selectedCase) return;
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      for (const file of Array.from(files)) {
+        formData.append("files", file);
+      }
+      // Use the case's thread_id (patient_thread_id) for the uploads API
+      const threadId = (selectedCase as any).patient_thread_id || selectedCase.case_id;
+      const res = await fetch(
+        `${getBackendBaseURL()}/api/threads/${threadId}/uploads`,
+        { method: "POST", body: formData }
+      );
+      if (res.ok) {
+        loadCases(); // Refresh to pick up new evidence
+      }
+    } catch (err) {
+      console.error("[DoctorUpload] Failed:", err);
+    } finally {
+      setIsUploading(false);
+      if (uploadRef.current) uploadRef.current.value = "";
+    }
+  };
+
+  // ── Create new case handler ──
+  const handleCreateCase = async () => {
+    setIsCreating(true);
+    try {
+      const threadId = `doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const res = await fetch(`${getBackendBaseURL()}/api/cases`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patient_thread_id: threadId,
+          priority: newCaseForm.priority,
+          patient_info: {
+            name: newCaseForm.name || null,
+            age: newCaseForm.age ? parseInt(newCaseForm.age) : null,
+            sex: newCaseForm.sex || null,
+            phone: newCaseForm.phone || null,
+            chief_complaint: newCaseForm.chief_complaint || null,
+            present_illness: newCaseForm.present_illness || null,
+          },
+        }),
+      });
+      if (res.ok) {
+        setShowNewCase(false);
+        setNewCaseForm({ name: "", age: "", sex: "\u7537", phone: "", chief_complaint: "", present_illness: "", priority: "medium" });
+        loadCases();
+      }
+    } catch (err) {
+      console.error("[CreateCase] Failed:", err);
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
   const filterButtons = [
     { key: "all", label: "全部", count: counts.total },
     { key: "pending", label: "待审", count: counts.pending, dot: "bg-amber-500" },
@@ -186,9 +263,40 @@ export default function DoctorQueuePage() {
         <div className="px-6 pt-6 pb-4 border-b border-slate-100 space-y-4">
           <div className="flex items-center justify-between">
             <h1 className="text-xl font-bold text-slate-800 tracking-tight">候诊队列</h1>
-            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-              {counts.pending} 待审
-            </Badge>
+            <div className="flex items-center gap-2">
+              {/* 新建病例 */}
+              <Button
+                variant="default"
+                size="sm"
+                className="h-7 gap-1.5 text-xs bg-blue-600 hover:bg-blue-700"
+                onClick={() => setShowNewCase(true)}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                新建病例
+              </Button>
+              {/* [ADR-021] 医生端上传按钮 */}
+              <input
+                ref={uploadRef}
+                type="file"
+                className="hidden"
+                accept="image/*,.pdf,.dcm"
+                multiple
+                onChange={handleDoctorUpload}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
+                disabled={!selectedCase || isUploading}
+                onClick={() => uploadRef.current?.click()}
+              >
+                <Upload className="h-3.5 w-3.5" />
+                {isUploading ? "上传中..." : "上传文件"}
+              </Button>
+              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                {counts.pending} 待审
+              </Badge>
+            </div>
           </div>
 
           {/* Search */}
@@ -424,5 +532,125 @@ export default function DoctorQueuePage() {
         )}
       </div>
     </div>
+
+      {/* ── New Case Dialog (Modal Overlay) ── */}
+      {showNewCase && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-[480px] max-h-[90vh] overflow-y-auto border border-slate-200">
+            {/* Dialog Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <h2 className="text-lg font-bold text-slate-800">\u65b0\u5efa\u75c5\u4f8b</h2>
+              <button onClick={() => setShowNewCase(false)} className="p-1 rounded-lg hover:bg-slate-100 transition-colors">
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+
+            {/* Form */}
+            <div className="px-6 py-5 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-slate-500 mb-1 block">\u59d3\u540d</label>
+                  <Input
+                    value={newCaseForm.name}
+                    onChange={(e) => setNewCaseForm(p => ({ ...p, name: e.target.value }))}
+                    placeholder="\u8bf7\u8f93\u5165\u59d3\u540d"
+                    className="h-9 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-500 mb-1 block">\u5e74\u9f84</label>
+                  <Input
+                    type="number"
+                    value={newCaseForm.age}
+                    onChange={(e) => setNewCaseForm(p => ({ ...p, age: e.target.value }))}
+                    placeholder="\u5e74\u9f84"
+                    className="h-9 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-500 mb-1 block">\u6027\u522b</label>
+                  <select
+                    value={newCaseForm.sex}
+                    onChange={(e) => setNewCaseForm(p => ({ ...p, sex: e.target.value }))}
+                    className="w-full h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-800 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-200"
+                  >
+                    <option value="\u7537">\u7537</option>
+                    <option value="\u5973">\u5973</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">\u8054\u7cfb\u7535\u8bdd</label>
+                <Input
+                  value={newCaseForm.phone}
+                  onChange={(e) => setNewCaseForm(p => ({ ...p, phone: e.target.value }))}
+                  placeholder="选填"
+                  className="h-9 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">\u4e3b\u8bc9 *</label>
+                <Textarea
+                  value={newCaseForm.chief_complaint}
+                  onChange={(e) => setNewCaseForm(p => ({ ...p, chief_complaint: e.target.value }))}
+                  placeholder="\u60a3\u8005\u4e3b\u8981\u75c7\u72b6\u548c\u4e0d\u9002"
+                  className="text-sm min-h-[60px] resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">\u73b0\u75c5\u53f2</label>
+                <Textarea
+                  value={newCaseForm.present_illness}
+                  onChange={(e) => setNewCaseForm(p => ({ ...p, present_illness: e.target.value }))}
+                  placeholder="\u75c7\u72b6\u53d1\u5c55\u8fc7\u7a0b\uff08\u9009\u586b\uff09"
+                  className="text-sm min-h-[50px] resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1.5 block">\u4f18\u5148\u7ea7</label>
+                <div className="flex gap-2">
+                  {(["low", "medium", "high", "critical"] as const).map((p) => {
+                    const cfg = priorityConfig[p];
+                    const isActive = newCaseForm.priority === p;
+                    return (
+                      <button
+                        key={p}
+                        onClick={() => setNewCaseForm(prev => ({ ...prev, priority: p }))}
+                        className={cn(
+                          "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all",
+                          isActive ? cfg.color + " shadow-sm" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+                        )}
+                      >
+                        <span className={cn("w-1.5 h-1.5 rounded-full", isActive ? cfg.dot : "bg-slate-300")} />
+                        {cfg.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Dialog Footer */}
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50/50">
+              <Button variant="outline" size="sm" onClick={() => setShowNewCase(false)} disabled={isCreating}>
+                \u53d6\u6d88
+              </Button>
+              <Button
+                size="sm"
+                className="bg-blue-600 hover:bg-blue-700 gap-1.5"
+                onClick={handleCreateCase}
+                disabled={isCreating || !newCaseForm.chief_complaint.trim()}
+              >
+                {isCreating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                {isCreating ? "\u521b\u5efa\u4e2d..." : "\u521b\u5efa\u75c5\u4f8b"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
   );
 }

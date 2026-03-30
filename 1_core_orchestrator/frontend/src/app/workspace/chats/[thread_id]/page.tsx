@@ -3,7 +3,7 @@
 import { useCallback } from "react";
 
 import { type PromptInputMessage } from "@/components/ai-elements/prompt-input";
-import { ArtifactTrigger, ImagingTrigger } from "@/components/workspace/artifacts";
+import { ArtifactTrigger } from "@/components/workspace/artifacts";
 import {
   ChatBox,
   useSpecificChatMode,
@@ -91,7 +91,6 @@ export default function ChatPage() {
             <div className="flex items-center gap-2">
               <TokenUsageIndicator messages={thread.messages} />
               <ExportTrigger threadId={threadId} />
-              <ImagingTrigger />
               <ArtifactTrigger />
             </div>
           </header>

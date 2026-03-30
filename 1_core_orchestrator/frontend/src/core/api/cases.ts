@@ -145,6 +145,33 @@ export async function fetchDoctorStats(): Promise<CaseCounts> {
   return res.json();
 }
 
+export async function updatePatientInfo(
+  caseId: string,
+  info: Partial<PatientInfo>,
+): Promise<CaseData> {
+  const res = await fetch(`${BASE()}/cases/${caseId}/patient-info`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(info),
+  });
+  if (!res.ok) throw new Error(`Failed to update patient info: ${res.status}`);
+  return res.json();
+}
+
+export async function createCase(data: {
+  patient_thread_id: string;
+  priority?: string;
+  patient_info: Partial<PatientInfo>;
+}): Promise<CaseData> {
+  const res = await fetch(`${BASE()}/cases`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Failed to create case: ${res.status}`);
+  return res.json();
+}
+
 // ── SSE Helper ─────────────────────────────────────────────
 
 export type CaseEvent = {
