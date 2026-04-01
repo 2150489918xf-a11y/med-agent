@@ -6,6 +6,7 @@ import os
 from typing import Callable, Sequence, Awaitable
 
 from .analyzer_registry import AnalysisResult, get_analyzers_for
+from .circuit_breaker import apply_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ async def analyze_single_file(
         result.category = category
         result.confidence = confidence
         result.analyzer_name = spec.name
+        # [ADR-034] 后置熔断拦截：根据病种策略打上 review_status 标记
+        result = apply_circuit_breaker(result)
         return result
     except Exception as e:
         logger.error(f"Analyzer {spec.name} failed on {filename}: {e}", exc_info=True)

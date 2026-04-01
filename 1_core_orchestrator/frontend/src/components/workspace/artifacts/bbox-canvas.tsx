@@ -14,6 +14,14 @@ export interface Finding {
   /** 不规则分割蒙版的多边形顶点坐标 (扁平数组: [x1,y1,x2,y2,...])。
    *  当此字段存在时，渲染多边形轮廓替代矩形框。 */
   polygon?: number[];
+  /** 病种标识键，用于查询置信度熔断策略 (如 "brain_glioma") */
+  disease_key?: string;
+  /** 熔断审核状态：forced_review=强制介入 / suggested_review=建议复核 / auto_passed=自动放行 */
+  review_status?: "forced_review" | "suggested_review" | "auto_passed";
+  /** 熔断原因描述文本 */
+  review_reason?: string;
+  /** 病种风险等级 */
+  risk_level?: "critical" | "high" | "medium" | "low";
   location?: string;
   location_cn?: string;
   is_solid?: boolean;
@@ -62,6 +70,17 @@ const BRUSH_COLOR = "#ff6b6b";
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 5;
 
+// [ADR-034] 置信度熔断视觉系统
+const FUSE_FORCED_STROKE = "rgba(239, 68, 68, 0.95)";   // 🔴 强制审核 - 红色
+const FUSE_FORCED_FILL   = "rgba(239, 68, 68, 0.12)";
+const FUSE_FORCED_LABEL  = "rgba(220, 38, 38, 0.9)";
+const FUSE_SUGGEST_STROKE = "rgba(245, 158, 11, 0.9)";  // 🟡 建议复核 - 橙色
+const FUSE_SUGGEST_FILL   = "rgba(245, 158, 11, 0.08)";
+const FUSE_SUGGEST_LABEL  = "rgba(217, 119, 6, 0.9)";
+const FUSE_PASSED_STROKE  = "rgba(34, 197, 94, 0.8)";   // 🟢 自动通过 - 绿色
+const FUSE_PASSED_FILL    = "rgba(34, 197, 94, 0.06)";
+const FUSE_PASSED_LABEL   = "rgba(22, 163, 74, 0.85)";
+
 // ── SelectableRect (with Transformer) ─────────────────────────
 function SelectableRect({
   finding,
@@ -95,15 +114,41 @@ function SelectableRect({
   const h = y2 - y1;
   const isDoctor = finding.reviewed_by_doctor;
   const doctorTag = isDoctor ? " 👨‍⚕️" : "";
-  const labelText = `#${finding.id.substring(0, 4)}: ${(finding.confidence * 100).toFixed(0)}% ${finding.disease}${doctorTag}`;
+  // [ADR-034] 置信度熔断状态标记
+  const fuseTag = finding.review_status === "forced_review" ? " ⚠️待审"
+    : finding.review_status === "auto_passed" ? " ✅" : "";
+  const labelText = `#${finding.id.substring(0, 4)}: ${(finding.confidence * 100).toFixed(0)}% ${finding.disease}${doctorTag}${fuseTag}`;
   const fontSize = Math.max(12, Math.min(16, w * 0.06)) / scale;
 
-  const strokeColor = isSelected
-    ? BBOX_SELECTED_STROKE
-    : isDoctor
-      ? BBOX_DOCTOR_STROKE
-      : BBOX_STROKE;
-  const fillColor = isSelected ? BBOX_SELECTED_FILL : BBOX_FILL;
+  // 颜色优先级：选中 > 熔断状态 > 医生审核 > 默认
+  let strokeColor: string;
+  let fillColor: string;
+  let labelBg: string;
+  if (isSelected) {
+    strokeColor = BBOX_SELECTED_STROKE;
+    fillColor = BBOX_SELECTED_FILL;
+    labelBg = LABEL_SELECTED_BG;
+  } else if (finding.review_status === "forced_review") {
+    strokeColor = FUSE_FORCED_STROKE;
+    fillColor = FUSE_FORCED_FILL;
+    labelBg = FUSE_FORCED_LABEL;
+  } else if (finding.review_status === "suggested_review") {
+    strokeColor = FUSE_SUGGEST_STROKE;
+    fillColor = FUSE_SUGGEST_FILL;
+    labelBg = FUSE_SUGGEST_LABEL;
+  } else if (finding.review_status === "auto_passed") {
+    strokeColor = FUSE_PASSED_STROKE;
+    fillColor = FUSE_PASSED_FILL;
+    labelBg = FUSE_PASSED_LABEL;
+  } else if (isDoctor) {
+    strokeColor = BBOX_DOCTOR_STROKE;
+    fillColor = BBOX_FILL;
+    labelBg = LABEL_BG;
+  } else {
+    strokeColor = BBOX_STROKE;
+    fillColor = BBOX_FILL;
+    labelBg = LABEL_BG;
+  }
 
   return (
     <Group>
@@ -129,7 +174,7 @@ function SelectableRect({
         y={y1 - fontSize * 1.6}
         width={labelText.length * fontSize * 0.55 + 8 / scale}
         height={fontSize * 1.4}
-        fill={isSelected ? LABEL_SELECTED_BG : LABEL_BG}
+        fill={labelBg}
         cornerRadius={2 / scale}
         listening={false}
       />
