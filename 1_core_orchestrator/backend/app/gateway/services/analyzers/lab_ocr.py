@@ -8,6 +8,7 @@ from app.gateway.services.analyzer_registry import AnalysisResult
 from app.gateway.services.vision_gateway import enhance_lab_report
 from app.gateway.services.paddle_ocr import fetch_medical_report_ocr, _extract_title_from_markdown
 from app.core.config.paths import get_paths
+from app.core.utils.image_optimizer import optimize_lab_image
 
 logger = logging.getLogger(__name__)
 
@@ -22,14 +23,29 @@ class LabOCRAnalyzer:
         enhanced_name = f"enhanced_{safe_filename}"
         enhanced_host = str(outputs_dir / enhanced_name)
 
-        # Step 1: Enhance Image for text extraction
+        # Step 0: 按需压缩优化（灰度化 + Lanczos缩放 + 锐化）
+        # 只针对化验单/文字报告，原图保持不动，压缩图存入 outputs 沙盒
+        optimized_path = image_path
         if Path(image_path).exists():
-             await asyncio.to_thread(enhance_lab_report, image_path, enhanced_host)
-        else:
-             logger.warning(f"File missing, skipping enhancement: {image_path}")
+            try:
+                opt_dst = str(outputs_dir / f"{Path(image_path).stem}_ocr_opt.jpg")
+                optimized_path = await asyncio.to_thread(
+                    optimize_lab_image, image_path, opt_dst
+                )
+                if optimized_path != image_path:
+                    logger.info(f"[LabOCR] 使用压缩优化图: {Path(optimized_path).name}")
+            except Exception as e:
+                logger.warning(f"[LabOCR] 图像压缩失败，降级使用原图: {e}")
+                optimized_path = image_path
 
-        # Step 2: Extract text using VLM
-        ocr_markdown = await fetch_medical_report_ocr(image_path)
+        # Step 1: Enhance Image for text extraction
+        if Path(optimized_path).exists():
+             await asyncio.to_thread(enhance_lab_report, optimized_path, enhanced_host)
+        else:
+             logger.warning(f"File missing, skipping enhancement: {optimized_path}")
+
+        # Step 2: Extract text using VLM (使用压缩后的图以加速传输和推理)
+        ocr_markdown = await fetch_medical_report_ocr(optimized_path)
         logger.info(f"VLM OCR yield ({original_filename}): {len(ocr_markdown)} chars" if ocr_markdown else f"VLM Empty ({original_filename})")
 
         evidence_title = original_filename

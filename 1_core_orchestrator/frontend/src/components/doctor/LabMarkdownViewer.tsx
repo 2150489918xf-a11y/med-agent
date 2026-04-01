@@ -66,13 +66,16 @@ function parseMarkdownTable(md: string): { headers: string[]; rows: string[][]; 
  * 验证逻辑：检查异常标记是否与参考区间匹配
  * 返回需要警告的行索引及原因
  */
-function validateLabResults(rows: string[][]): Map<number, string> {
+function validateLabResults(headers: string[], rows: string[][]): Map<number, string> {
   const warnings = new Map<number, string>();
   
-  // 找到 "结果" 和 "参考区间" 列的索引（基于常见表头位置）
-  // 通常: [序号, 项目, 英文, 结果, 参考区间, 单位]
-  const resultCol = 3;  // "结果" 列
-  const refCol = 4;     // "参考区间" 列
+  // 动态匹配 "结果" 和 "参考区间" 列的索引，兼容各家医院不同格式
+  let resultCol = headers.findIndex(h => /结果|测定值|检测值|数值/i.test(h));
+  let refCol = headers.findIndex(h => /参考|范围|区间|正常值/i.test(h));
+
+  // 兜底方案，如果各种奇葩表头都没匹配上，降级到常规位置
+  if (resultCol === -1) resultCol = 3;
+  if (refCol === -1) refCol = 4;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -234,7 +237,13 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
   }, [parsed.rows, parsedBeforeInitial]);
 
   // 验证结果
-  const warnings = useMemo(() => validateLabResults(tableRows), [tableRows]);
+  const warnings = useMemo(() => validateLabResults(parsed.headers, tableRows), [parsed.headers, tableRows]);
+
+  // 动态寻找结果列的索引，以便给该列标底部红线波浪警告
+  const resultColFallback = useMemo(() => {
+    let col = parsed.headers.findIndex(h => /结果|测定值|检测值|数值/i.test(h));
+    return col === -1 ? 3 : col;
+  }, [parsed.headers]);
 
   // 动态将 beforeLines 分组为 "markdown" 和 "fields" 以供独立渲染
   const beforeBlocks = useMemo(() => {
@@ -355,7 +364,7 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
                     key={ci}
                     value={cell}
                     isAbnormal={cellIsAbnormal}
-                    warning={ci === 3 && rowWarning ? rowWarning : undefined}
+                    warning={((ci === resultColFallback) || (ci === 3)) && rowWarning ? rowWarning : undefined}
                     onChange={(newVal) => handleCellChange(actualIdx, ci, newVal)}
                   />
                 );

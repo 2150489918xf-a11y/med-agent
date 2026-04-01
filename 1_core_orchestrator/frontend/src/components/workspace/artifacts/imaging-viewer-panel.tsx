@@ -36,10 +36,17 @@ export function ImagingViewerPanel({
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Use doctor_result if available, otherwise fall back to ai_result
   const doctorResult = report.doctor_result || {};
-  const findings: Finding[] = doctorResult.findings || report.ai_result?.findings || [];
-  const brushStrokes: BrushStroke[] = doctorResult.brush_strokes || [];
+  const findings: Finding[] = (doctorResult.findings || report.ai_result?.findings || []).map((f: any) => ({
+    ...f,
+    disease: f.disease || "",
+  }));
+  const brushStrokes: BrushStroke[] = (doctorResult.brush_strokes || []).map((b: any) => ({
+    ...b,
+    id: b.id || Math.random().toString(36).slice(2),
+    strokeWidth: b.strokeWidth || 2,
+    tool: b.tool || "pencil",
+  }));
   const version = (report as any).version || 1;
   const doctorComment = doctorResult.doctor_comment || "";
   const conclusion = doctorResult.conclusion || "pending";
