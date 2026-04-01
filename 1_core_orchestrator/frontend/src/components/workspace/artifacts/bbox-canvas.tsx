@@ -11,6 +11,9 @@ export interface Finding {
   confidence: number;
   ai_confidence?: number;
   bbox: [number, number, number, number]; // [x1, y1, x2, y2] pixel coords
+  /** 不规则分割蒙版的多边形顶点坐标 (扁平数组: [x1,y1,x2,y2,...])。
+   *  当此字段存在时，渲染多边形轮廓替代矩形框。 */
+  polygon?: number[];
   location?: string;
   location_cn?: string;
   is_solid?: boolean;
@@ -160,6 +163,90 @@ function SelectableRect({
           anchorCornerRadius={2 / scale}
         />
       )}
+    </Group>
+  );
+}
+
+// ── SelectablePolygon (不规则分割蒙版) ─────────────────────────
+// 用于脑肿瘤等需要精确轮廓标注的场景
+function SelectablePolygon({
+  finding,
+  isSelected,
+  isDraggable,
+  scale,
+  onSelect,
+  onDragEnd,
+}: {
+  finding: Finding;
+  isSelected: boolean;
+  isDraggable: boolean;
+  scale: number;
+  onSelect: () => void;
+  onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
+}) {
+  const points = finding.polygon || [];
+  if (points.length < 6) return null; // 至少 3 个顶点
+
+  // 计算多边形的外接矩形中心，用于放置标签
+  let minX = Infinity, minY = Infinity;
+  for (let i = 0; i < points.length; i += 2) {
+    const px = points[i] ?? 0;
+    const py = points[i + 1] ?? 0;
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+  }
+
+  const isDoctor = finding.reviewed_by_doctor;
+  const doctorTag = isDoctor ? " 👨\u200d⚕️" : "";
+  const labelText = `#${finding.id.substring(0, 4)}: ${(finding.confidence * 100).toFixed(0)}% ${finding.disease}${doctorTag}`;
+  const fontSize = Math.max(12, 14) / scale;
+
+  const strokeColor = isSelected
+    ? BBOX_SELECTED_STROKE
+    : isDoctor
+      ? BBOX_DOCTOR_STROKE
+      : "rgba(255, 80, 80, 0.85)";  // 脑肿瘤蒙版用醒目的红色
+  const fillColor = isSelected
+    ? "rgba(56, 189, 248, 0.18)"
+    : "rgba(255, 80, 80, 0.15)";  // 半透明红色填充
+
+  return (
+    <Group
+      draggable={isDraggable}
+      onClick={onSelect}
+      onTap={onSelect}
+      onDragEnd={onDragEnd}
+    >
+      {/* 不规则多边形轮廓蒙版 */}
+      <Line
+        points={points}
+        fill={fillColor}
+        stroke={strokeColor}
+        strokeWidth={Math.max(2, 2.5 / scale)}
+        closed={true}
+        tension={0}
+        hitStrokeWidth={10 / scale}
+      />
+      {/* 标签背景 */}
+      <Rect
+        x={minX}
+        y={minY - fontSize * 1.6}
+        width={labelText.length * fontSize * 0.55 + 8 / scale}
+        height={fontSize * 1.4}
+        fill={isSelected ? LABEL_SELECTED_BG : "rgba(255, 80, 80, 0.85)"}
+        cornerRadius={2 / scale}
+        listening={false}
+      />
+      {/* 标签文字 */}
+      <Text
+        x={minX + 4 / scale}
+        y={minY - fontSize * 1.4}
+        text={labelText}
+        fontSize={fontSize}
+        fontFamily="monospace"
+        fill="white"
+        listening={false}
+      />
     </Group>
   );
 }
@@ -445,19 +532,33 @@ export function BboxCanvas({
           )}
         </Layer>
 
-        {/* Bbox layer */}
+        {/* Bbox + Polygon layer */}
         <Layer>
           {findings.map((f) => (
-            <SelectableRect
-              key={f.id}
-              finding={f}
-              isSelected={f.id === selectedId}
-              isDraggable={isDraggable}
-              scale={scale}
-              onSelect={() => onFindingSelect?.(f.id)}
-              onDragEnd={(e) => handleDragEnd(f.id, e)}
-              onTransformEnd={(e) => handleTransformEnd(f.id, e)}
-            />
+            f.polygon && f.polygon.length >= 6 ? (
+              /* 不规则分割蒙版模式 (脑肿瘤等) */
+              <SelectablePolygon
+                key={f.id}
+                finding={f}
+                isSelected={f.id === selectedId}
+                isDraggable={isDraggable}
+                scale={scale}
+                onSelect={() => onFindingSelect?.(f.id)}
+                onDragEnd={(e) => handleDragEnd(f.id, e)}
+              />
+            ) : (
+              /* 标准矩形框模式 (胸部X光等) */
+              <SelectableRect
+                key={f.id}
+                finding={f}
+                isSelected={f.id === selectedId}
+                isDraggable={isDraggable}
+                scale={scale}
+                onSelect={() => onFindingSelect?.(f.id)}
+                onDragEnd={(e) => handleDragEnd(f.id, e)}
+                onTransformEnd={(e) => handleTransformEnd(f.id, e)}
+              />
+            )
           ))}
 
           {/* Pending bbox preview — shown while doctor fills in the form */}

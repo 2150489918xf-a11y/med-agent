@@ -6,6 +6,7 @@ def register_all():
     """Register all available analyzers on startup."""
     from .lab_ocr import LabOCRAnalyzer
     from .xray_mcp import XrayMCPAnalyzer
+    from .brain_mcp import BrainTumorAnalyzer
     from .vlm_fallback import VLMFallbackAnalyzer
 
     register(AnalyzerSpec(
@@ -22,6 +23,14 @@ def register_all():
         handler=XrayMCPAnalyzer().analyze,
         min_confidence=0.75,
         gpu_bound=True,   
+    ))
+
+    register(AnalyzerSpec(
+        name="mcp_brain_tumor",
+        categories=["brain_mri"],
+        handler=BrainTumorAnalyzer().analyze,
+        min_confidence=0.6,
+        gpu_bound=True,
     ))
     
     register(AnalyzerSpec(

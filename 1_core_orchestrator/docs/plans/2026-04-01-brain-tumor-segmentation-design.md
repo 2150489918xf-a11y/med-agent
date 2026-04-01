@@ -1,31 +1,31 @@
-# Brain Tumor HITL Segmentation Architecture Design
+# 脑肿瘤 HITL 实例分割架构设计文档
 
-**Date**: 2026-04-01
-**Topic**: Brain Tumor Localization and Anatomical Reasoning
+**日期**: 2026-04-01
+**主题**: 脑肿瘤精准定位与解剖学病理推理 (Brain Tumor Localization and Anatomical Reasoning)
 
-## 1. Overview
-The goal is to develop a highly polished, competition-ready "Human-In-The-Loop" (HITL) module for Brain Tumor MRI recognition. The system must support irregular polygonal segmentation masks (rather than simple bounding boxes) for high visual fidelity and clinical accuracy, followed by a VLM-generated anatomical report.
+## 1. 架构总览 (Overview)
+本模块旨在打造一个比赛级、具有高强视觉表现力的 **“人在环路”（HITL）** 脑肿瘤核磁共振（MRI）识别子系统。本系统抛弃了粗糙的外接矩形框，采用了不规则的**多边形轮廓分割掩码（Polygonal Segmentation Masks）**以体现医疗级的临床精度。分割完成后，系统通过 VLM 多模态大模型生成极度专业的解剖学叙述报告。
 
-## 2. Dual-Engine Architecture 
+## 2. 双引擎架构 (Dual-Engine Architecture)
 
-### Engine A: Localization & Segmentation (YOLOv8-Seg)
-- **Model**: YOLOv8-Seg (Ultralytics Instance Segmentation Model fine-tuned on BraTS or similar Brain Tumor datasets).
-- **Why**: Addresses the user's primary concern regarding **Segmentation Accuracy** and speed. Unlike traditional U-Net which outputs heavy dense pixel masks, YOLO-seg outputs incredibly accurate and mathematically precise polygon coordinates natively (`[x1, y1, x2, y2...]`).
-- **Speed**: < 50ms per clinical slice on normal hardware.
+### 引擎 A: 病理学精准定位与分割 (YOLOv11-Seg)
+- **选用模型**: YOLOv11-Seg (或 YOLOv8-Seg 实例分割模型，专门针对基于 BraTS 数据集训练微调)。
+- **动因 (Why)**: 为解决对 **“分割准确率”** 的核心顾虑。传统的 U-Net 分割虽然好，但会输出极为沉重的全尺寸像素矩阵，导致前后端传输卡顿。YOLO-seg 引擎兼顾了 YOLO 极速的推理能力（仅需不到 50 毫秒），同时原生输出极度精准且轻量化的**多边形多点坐标阵列**（格式如 `[x1, y1, x2, y2...]`）。
+- **性能**: 普通算力下切片级耗时 < 50ms。
 
-### Engine B: Anatomical Reasoning (Qwen-VL via SiliconFlow API)
-- **Model**: Qwen2.5-VL-7B/72B Instruct.
-- **Why**: Replaces YOLO's inability to express anatomical relationships. The VLM acts as the "radiologist assessor", taking the segmented image as context and generating natural language insights (e.g., "Left temporal lobe Glioma, causing midline shift").
+### 引擎 B: 解剖学病理推理 (Qwen-VL via SiliconFlow API)
+- **选用模型**: Qwen2.5-VL-7B/72B Instruct。
+- **动因 (Why)**: 弥补 YOLO“只会画图不会说话”的痛点。大模型在此充当“影像科主治医师”，基于已经被精准框出轮廓的图片作为语境输入，生成自然语言的强业务洞察（例如：“左侧颞叶发现胶质瘤，周围伴有重度水肿，已导致中线轻度偏移”）。
 
-## 3. Workflow & Data Flow
+## 3. 业务流转管线 (Workflow & Data Flow)
 
-1. **Upload & Gateway**: User uploads single/multiple 2D MRI slices (`vision_gateway` categorizes as `brain_mri`).
-2. **MCP Segmentation**: `brain_mcp.py` routes the image to the remote YOLOv8-seg microservice. The service returns an array of normalized SVG polygon coordinates.
-3. **Frontend Rendering (`<MaskCanvas>`)**: The frontend React app receives the polygon arrays. It draws semi-transparent breathing overlays exactly matching the brain tumor boundaries.
-4. **Editable HITL (Human-in-the-Loop)**: The doctor reviews the mask. They can delete false positives or drag the polygon vertices to correct boundaries.
-5. **VLM Synthesis**: Once the doctor approves, the validated polygon crop + original image + label are sent to Qwen-VL. A comprehensive narrative diagnostic report is generated in the LLM chat window.
+1. **上传与网关鉴别**: 医生/患者上传一张或多张 2D MRI 切片。`vision_gateway` 的分类器将其精准打标为 `brain_mri`。
+2. **MCP 微服务分割运算**: 网关的调度器 `brain_mcp.py` 将图片转发给远端的 YOLO-seg 洗稿微服务。服务完成推理后，向主干网段返回包含 SVM 规范多边形的 JSON 坐标阵列。
+3. **前端高逼格渲染 (`<MaskCanvas>`)**: 前端 React 得到坐标后，在患者病历原图上方，精准糊上一层呼吸形态的**半透明彩色不规则蒙版**（彻底贴合脑瘤边缘）。
+4. **可交互式 HITL (最强痛点展示)**: 医生此时可以在屏幕前，用鼠标**拖拽修型**、手动抹除误判边缘，进行像素级把关。
+5. **VLM 终极报告合成**: 在医生点击“诊断确认”后，携带最终核准的掩码坐标、病种类别与原图，全套扔给 Qwen-VL，在右侧聊天框行如流水般生成最权威的患者解答。
 
-## 4. Components to Build
-- **Frontend**: Update UI to support SVG Path overlay via a new `<MaskCanvas>` subcomponent in `ImagingViewer`.
-- **Backend Orchestrator**: Implement `brain_tumor_analyzer.py` hooked into the pluggable registry.
-- **External MCP Server**: A localized python SDK wrapping `ultralytics YOLO('yolov8n-seg.pt')` exposed as an MCP tool `analyze_brain_mri`.
+## 4. 后续开发组件清单 (Components to Build)
+- **前端工作站**: 升级 `ImagingViewer` 里的 UI，新增支持解析与互动调整 SVG 多边形轨迹 `<path>` 的 `<MaskCanvas>` 组件。
+- **后端调度网关**: 在 Orchestrator 中新增 `brain_tumor_analyzer.py` 调度中间件，挂载进现有的智能体注册表。
+- **独立 MCP 诊断节点**: 编写一个封装 `ultralytics YOLO('yolov8n-seg.pt')` 的极简 Python 微型服务器（对外暴露出 `analyze_brain_mri` 的 MCP 协议接口）。

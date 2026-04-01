@@ -22,10 +22,11 @@ logger = logging.getLogger(__name__)
 
 # 中文分类标签（Chinese-CLIP 原生支持中文）
 # 提高区分度，防止胸片被误判为临床照片
-LABELS = ["化验单检验报告", "X光CT超声医学影像", "临床病理部位照片", "其他无关日常图片"]
+LABELS = ["化验单检验报告", "X光CT超声医学影像", "脑部核磁共振MRI图像", "临床病理部位照片", "其他无关日常图片"]
 CATEGORY_MAP = {
     "化验单检验报告": "lab_report",
     "X光CT超声医学影像": "medical_imaging",
+    "脑部核磁共振MRI图像": "brain_mri",
     "临床病理部位照片": "clinical_photo",
     "其他无关日常图片": "other",
 }
