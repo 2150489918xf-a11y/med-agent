@@ -114,15 +114,15 @@ def _extract_lab_numbers(text: str) -> list[str]:
     # 移除时间格式
     cleaned = re.sub(r'\d{1,2}:\d{2}(:\d{2})?', '', cleaned)
 
-    # 提取所有数值（含小数）
-    all_nums = re.findall(r'(?<![-/])\b(\d+\.\d+|\d{2,})\b(?![-/年月日号])', cleaned)
+    # 提取所有数值（含小数）: 支持单个数字和浮点数
+    all_nums = re.findall(r'(?<![-/])\b(\d+\.\d+|\d+)\b(?![-/年月日号])', cleaned)
 
     # 过滤不像检验值的数字
     result = []
     for n in all_nums:
         val = float(n)
-        # 排除年份范围的4位数字
-        if 2000 <= val <= 2099:
+        # 排除年份范围的4位数字（粗略过滤）
+        if 2000 <= val <= 2099 and len(n) == 4 and '.' not in n:
             continue
         # 排除过大的纯整数（通常是编号、电话等）
         if '.' not in n and val >= 100000:
