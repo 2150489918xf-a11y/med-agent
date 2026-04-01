@@ -1,0 +1,447 @@
+"""化验单数值校验器 (Lab Value Validator)。
+
+架构决策 (ADR-036):
+- 化验单 OCR 存在两类高危数值错误：
+  1. 小数点位移：OCR 将 5.55 识别为 55.5 或 555，导致结果超出/符合参考区间但与箭头标记矛盾。
+  2. 双源数值不一致：PaddleOCR 原始识别的数字与 Qwen 清洗后的数字不匹配，
+     说明某一环节引入了数值幻觉或手滑错误。
+
+- 本模块是一个纯函数式的后处理校验器，嵌入在 LabOCRAnalyzer 的 OCR 完成后、
+  返回 AnalysisResult 之前。
+- 校验结果以 warnings 列表形式挂载到 structured_data 中，前端可据此渲染告警 UI。
+- 校验器不修改原始数据，仅追加诊断信息。
+"""
+
+import re
+from dataclasses import dataclass, field
+from loguru import logger
+
+
+# ── 数据结构 ──────────────────────────────────────────────────
+
+@dataclass
+class ValueWarning:
+    """单条数值异常告警。"""
+    item_name: str          # 检验项目名称（如 "白细胞计数"）
+    warning_type: str       # "decimal_shift" | "value_mismatch"
+    severity: str           # "high" | "medium"
+    message: str            # 人类可读的告警描述
+    details: dict = field(default_factory=dict)  # 细节数据（便于前端渲染）
+
+    def to_dict(self) -> dict:
+        return {
+            "item_name": self.item_name,
+            "warning_type": self.warning_type,
+            "severity": self.severity,
+            "message": self.message,
+            "details": self.details,
+        }
+
+
+# ── 策略一：小数点位移检测 ────────────────────────────────────
+
+def _parse_reference_range(ref_str: str) -> tuple[float | None, float | None]:
+    """解析参考区间字符串，返回 (low, high)。
+
+    支持格式：
+    - "3.5-9.5"  → (3.5, 9.5)
+    - "130-175"  → (130.0, 175.0)
+    - "<5.0"     → (None, 5.0)
+    - ">10"      → (10.0, None)
+    - "≤5.0"     → (None, 5.0)
+    - "≥10"      → (10.0, None)
+    - 无法解析   → (None, None)
+    """
+    if not ref_str:
+        return None, None
+
+    ref = ref_str.strip()
+
+    # 范围格式: "3.5-9.5" 或 "3.5~9.5" 或 "3.5—9.5"
+    range_match = re.match(r'(\d+\.?\d*)\s*[-~—]\s*(\d+\.?\d*)', ref)
+    if range_match:
+        return float(range_match.group(1)), float(range_match.group(2))
+
+    # 上限格式: "<5.0" 或 "≤5.0"
+    upper_match = re.match(r'[<≤]\s*(\d+\.?\d*)', ref)
+    if upper_match:
+        return None, float(upper_match.group(1))
+
+    # 下限格式: ">10" 或 "≥10"
+    lower_match = re.match(r'[>≥]\s*(\d+\.?\d*)', ref)
+    if lower_match:
+        return float(lower_match.group(1)), None
+
+    return None, None
+
+
+def _is_in_range(value: float, low: float | None, high: float | None) -> bool:
+    """判断数值是否在参考区间内。"""
+    if low is not None and value < low:
+        return False
+    if high is not None and value > high:
+        return False
+    return True
+
+
+def _try_decimal_shifts(value: float) -> list[float]:
+    """生成小数点位移的候选修正值。
+
+    策略：将小数点左移/右移 1-2 位，生成可能的正确值。
+    例如 555 → [55.5, 5.55, 5550]（只返回合理方向的移位）
+    """
+    candidates = []
+    for shift in [0.1, 0.01, 10, 100]:
+        candidate = round(value * shift, 4)
+        if candidate > 0:
+            candidates.append(candidate)
+    return candidates
+
+
+def detect_decimal_shift_errors(markdown_text: str) -> list[ValueWarning]:
+    """从已清洗的 Markdown 表格中检测小数点位移错误。
+
+    检测逻辑：
+    1. 解析表格的每一行，提取「项目名」「结果值」「箭头标记」「参考区间」
+    2. 策略 A - 有箭头但数值在正常范围内 → 疑似小数点位移
+       （比如真实值 55.5 被识别为 5.55，落在参考区间内但原图有 ↑ 箭头）
+    3. 策略 B - 无箭头但数值在异常范围外 → 疑似小数点位移
+       （比如真实值 5.55 被识别为 55.5，超出参考区间但原图无箭头）
+    4. 对疑似错误的数值，尝试小数点位移找到能「自洽」的候选值
+    """
+    warnings: list[ValueWarning] = []
+    lines = markdown_text.split("\n")
+
+    # 定位表格区域：找到表头分隔行 (|---|---|)
+    table_start = -1
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.endswith("|"):
+            cells = stripped[1:-1].split("|")
+            if cells and all(re.match(r'^[\s\-:]+$', c) for c in cells):
+                table_start = i + 1  # 数据从分隔行下一行开始
+                break
+
+    if table_start < 0:
+        return warnings  # 没有找到表格
+
+    # 获取表头行来定位列索引
+    header_line = lines[table_start - 2].strip() if table_start >= 2 else ""
+    header_cells = [c.strip() for c in header_line[1:-1].split("|")] if header_line.startswith("|") else []
+
+    # 尝试智能定位「结果」列和「参考区间」列的索引
+    result_col_idx = _find_column_index(header_cells, ["结果", "result", "检验结果", "检测结果"])
+    ref_col_idx = _find_column_index(header_cells, ["参考区间", "参考范围", "参考值", "reference", "正常范围", "正常值"])
+    name_col_idx = _find_column_index(header_cells, ["检验项目", "项目", "项目名称", "名称", "item", "测试项目"])
+
+    # 如果无法定位到关键列，放弃检测
+    if result_col_idx is None or ref_col_idx is None:
+        logger.debug("[LabValidator] 无法定位结果列或参考区间列，跳过小数点位移检测")
+        return warnings
+
+    # 逐行解析数据
+    for i in range(table_start, len(lines)):
+        line = lines[i].strip()
+        if not (line.startswith("|") and line.endswith("|")):
+            continue
+
+        cells = [c.strip() for c in line[1:-1].split("|")]
+        if len(cells) <= max(result_col_idx, ref_col_idx):
+            continue
+
+        # 提取项目名
+        item_name = cells[name_col_idx] if name_col_idx is not None and name_col_idx < len(cells) else f"第{i}行"
+
+        # 提取结果值和箭头
+        result_cell = cells[result_col_idx]
+        has_up_arrow = "↑" in result_cell
+        has_down_arrow = "↓" in result_cell
+        has_arrow = has_up_arrow or has_down_arrow
+
+        # 提取纯数值
+        num_match = re.search(r'(\d+\.?\d*)', result_cell)
+        if not num_match:
+            continue
+        result_value = float(num_match.group(1))
+
+        # 提取参考区间
+        ref_cell = cells[ref_col_idx]
+        ref_low, ref_high = _parse_reference_range(ref_cell)
+
+        # 如果参考区间无法解析，跳过
+        if ref_low is None and ref_high is None:
+            continue
+
+        in_range = _is_in_range(result_value, ref_low, ref_high)
+
+        # ── 策略 A：有箭头但数值在正常范围内 → 疑似小数点位移 ──
+        if has_arrow and in_range:
+            # 尝试找到移位后落入异常范围的候选值
+            shifted_candidates = _try_decimal_shifts(result_value)
+            plausible = []
+            for candidate in shifted_candidates:
+                if not _is_in_range(candidate, ref_low, ref_high):
+                    # 进一步验证箭头方向一致性
+                    if has_up_arrow and ref_high is not None and candidate > ref_high:
+                        plausible.append(candidate)
+                    elif has_down_arrow and ref_low is not None and candidate < ref_low:
+                        plausible.append(candidate)
+
+            if plausible:
+                arrow_symbol = "↑" if has_up_arrow else "↓"
+                warnings.append(ValueWarning(
+                    item_name=item_name,
+                    warning_type="decimal_shift",
+                    severity="high",
+                    message=(
+                        f"「{item_name}」结果 {result_value} 在参考区间 {ref_cell} 内，"
+                        f"但标记了 {arrow_symbol}。小数点可能位移，"
+                        f"候选修正值：{', '.join(str(c) for c in plausible)}"
+                    ),
+                    details={
+                        "original_value": result_value,
+                        "reference_range": ref_cell,
+                        "arrow": arrow_symbol,
+                        "candidates": plausible,
+                        "conflict": "arrow_but_in_range",
+                    },
+                ))
+
+        # ── 策略 B：无箭头但数值在异常范围外 → 疑似小数点位移 ──
+        elif not has_arrow and not in_range:
+            # 尝试找到移位后落入正常范围的候选值
+            shifted_candidates = _try_decimal_shifts(result_value)
+            plausible = [c for c in shifted_candidates if _is_in_range(c, ref_low, ref_high)]
+
+            if plausible:
+                direction = "偏高" if (ref_high is not None and result_value > ref_high) else "偏低"
+                warnings.append(ValueWarning(
+                    item_name=item_name,
+                    warning_type="decimal_shift",
+                    severity="high",
+                    message=(
+                        f"「{item_name}」结果 {result_value} 超出参考区间 {ref_cell}（{direction}），"
+                        f"但未标记异常箭头。小数点可能位移，"
+                        f"候选修正值：{', '.join(str(c) for c in plausible)}"
+                    ),
+                    details={
+                        "original_value": result_value,
+                        "reference_range": ref_cell,
+                        "direction": direction,
+                        "candidates": plausible,
+                        "conflict": "no_arrow_but_out_of_range",
+                    },
+                ))
+            else:
+                # 兜底：找不到自洽的移位候选，但"无箭头+超出范围"本身值得关注
+                # 可能原因：箭头被 OCR 丢失、小数点移位幅度超出搜索范围、或原始化验单确实无标注
+                direction = "偏高" if (ref_high is not None and result_value > ref_high) else "偏低"
+                warnings.append(ValueWarning(
+                    item_name=item_name,
+                    warning_type="decimal_shift",
+                    severity="medium",
+                    message=(
+                        f"「{item_name}」结果 {result_value} 超出参考区间 {ref_cell}（{direction}），"
+                        f"但未标记异常箭头。可能是箭头标记丢失或数值识别有误，请人工核对"
+                    ),
+                    details={
+                        "original_value": result_value,
+                        "reference_range": ref_cell,
+                        "direction": direction,
+                        "candidates": [],
+                        "conflict": "no_arrow_but_out_of_range",
+                    },
+                ))
+
+    if warnings:
+        logger.warning(
+            f"[LabValidator] 小数点位移检测发现 {len(warnings)} 个疑似错误: "
+            + ", ".join(w.item_name for w in warnings)
+        )
+
+    return warnings
+
+
+# ── 策略二：PaddleOCR vs Qwen 双源数值对账 ──────────────────
+
+def cross_validate_numbers(
+    ocr_raw_numbers: list[str],
+    cleaned_markdown: str,
+) -> list[ValueWarning]:
+    """对比 PaddleOCR 原始数值指纹和 Qwen 清洗后 Markdown 中的数值。
+
+    核心思路：
+    - ocr_raw_numbers 是 PaddleOCR 直接识别文本中提取的数字列表（视为"相机看到的真相"）
+    - cleaned_markdown 是 Qwen 大模型清洗/重排后的 Markdown 文本
+    - 从 cleaned_markdown 中提取数值，与 ocr_raw_numbers 做集合差异对比
+    - 在 Qwen 输出中出现但 OCR 中不存在的数字 → 可能是 LLM 数值幻觉
+    - 在 OCR 中出现但 Qwen 中消失的数字 → 可能是 LLM 遗漏
+
+    限制：
+    - 数字匹配采用字符串精确比较（"5.55" != "5.5"）
+    - 序号、表头行号等噪声数字无法完全过滤，使用频次分析降噪
+    """
+    if not ocr_raw_numbers or not cleaned_markdown:
+        return []
+
+    # 从清洗后 Markdown 中提取数值
+    from app.gateway.services.paddle_ocr import _extract_lab_numbers
+    qwen_numbers = _extract_lab_numbers(cleaned_markdown)
+
+    if not qwen_numbers:
+        return []
+
+    # 构建多重集（允许重复），用于精确频次对比
+    ocr_counts: dict[str, int] = {}
+    for n in ocr_raw_numbers:
+        ocr_counts[n] = ocr_counts.get(n, 0) + 1
+
+    qwen_counts: dict[str, int] = {}
+    for n in qwen_numbers:
+        qwen_counts[n] = qwen_counts.get(n, 0) + 1
+
+    warnings: list[ValueWarning] = []
+
+    # ── 检测 Qwen 新增的数字（可能是幻觉） ──
+    qwen_only = set(qwen_counts.keys()) - set(ocr_counts.keys())
+    # 过滤掉小整数序号（1-30），这些通常是表格序号列
+    qwen_only_filtered = {n for n in qwen_only if not (_is_likely_serial_number(n))}
+
+    if qwen_only_filtered:
+        warnings.append(ValueWarning(
+            item_name="(全局对账)",
+            warning_type="value_mismatch",
+            severity="medium",
+            message=(
+                f"Qwen 清洗后出现了 {len(qwen_only_filtered)} 个 OCR 原文中不存在的数字，"
+                f"可能为大模型数值幻觉：{', '.join(sorted(qwen_only_filtered))}"
+            ),
+            details={
+                "source": "qwen_hallucination",
+                "qwen_only_values": sorted(qwen_only_filtered),
+            },
+        ))
+
+    # ── 检测 OCR 有但 Qwen 丢失的数字（可能是遗漏） ──
+    ocr_only = set(ocr_counts.keys()) - set(qwen_counts.keys())
+    ocr_only_filtered = {n for n in ocr_only if not (_is_likely_serial_number(n))}
+
+    if ocr_only_filtered:
+        # 遗漏严重程度较低，可能是 Qwen 正确地去掉了噪声
+        # 但如果遗漏数量较多，还是值得提醒
+        if len(ocr_only_filtered) >= 3:
+            warnings.append(ValueWarning(
+                item_name="(全局对账)",
+                warning_type="value_mismatch",
+                severity="medium",
+                message=(
+                    f"OCR 原文中有 {len(ocr_only_filtered)} 个数字在 Qwen 清洗结果中消失，"
+                    f"请核对是否有遗漏：{', '.join(sorted(ocr_only_filtered))}"
+                ),
+                details={
+                    "source": "qwen_omission",
+                    "ocr_only_values": sorted(ocr_only_filtered),
+                },
+            ))
+
+    # ── 检测同一数字出现频次差异大（复制/吞并错误） ──
+    common_keys = set(ocr_counts.keys()) & set(qwen_counts.keys())
+    freq_mismatches = []
+    for n in common_keys:
+        if _is_likely_serial_number(n):
+            continue
+        diff = abs(ocr_counts[n] - qwen_counts[n])
+        if diff >= 2:
+            freq_mismatches.append(f"{n}(OCR×{ocr_counts[n]} vs Qwen×{qwen_counts[n]})")
+
+    if freq_mismatches:
+        warnings.append(ValueWarning(
+            item_name="(全局对账)",
+            warning_type="value_mismatch",
+            severity="medium",
+            message=(
+                f"以下数字在两个源中出现频次差异显著：{'; '.join(freq_mismatches)}"
+            ),
+            details={
+                "source": "frequency_mismatch",
+                "mismatched_values": freq_mismatches,
+            },
+        ))
+
+    if warnings:
+        logger.warning(
+            f"[LabValidator] 双源数值对账发现 {len(warnings)} 个异常: "
+            + "; ".join(w.message[:60] for w in warnings)
+        )
+
+    return warnings
+
+
+# ── 工具函数 ──────────────────────────────────────────────────
+
+def _find_column_index(header_cells: list[str], keywords: list[str]) -> int | None:
+    """根据关键词在表头中模糊匹配列索引。"""
+    for idx, cell in enumerate(header_cells):
+        cell_lower = cell.lower().strip()
+        for kw in keywords:
+            if kw.lower() in cell_lower:
+                return idx
+    return None
+
+
+def _is_likely_serial_number(value_str: str) -> bool:
+    """判断一个数字字符串是否可能是表格序号（1-30 的整数）。"""
+    if "." in value_str:
+        return False
+    try:
+        v = int(value_str)
+        return 1 <= v <= 30
+    except ValueError:
+        return False
+
+
+# ── 统一入口 ──────────────────────────────────────────────────
+
+def validate_lab_values(
+    cleaned_markdown: str,
+    ocr_raw_numbers: list[str],
+) -> list[dict]:
+    """化验单数值校验的统一入口。
+
+    同时运行两个策略：
+    1. 小数点位移检测（基于参考区间 + 箭头的自洽性检查）
+    2. 双源数值对账（PaddleOCR 原始数值 vs Qwen 清洗后数值）
+
+    Args:
+        cleaned_markdown: Qwen 清洗后的 Markdown 全文
+        ocr_raw_numbers: PaddleOCR 原始数值指纹列表
+
+    Returns:
+        告警字典列表，每个字典包含 item_name, warning_type, severity, message, details
+    """
+    all_warnings: list[ValueWarning] = []
+
+    # 策略一：小数点位移检测
+    try:
+        decimal_warnings = detect_decimal_shift_errors(cleaned_markdown)
+        all_warnings.extend(decimal_warnings)
+    except Exception as e:
+        logger.error(f"[LabValidator] 小数点位移检测异常: {type(e).__name__}: {e}")
+
+    # 策略二：双源数值对账
+    try:
+        mismatch_warnings = cross_validate_numbers(ocr_raw_numbers, cleaned_markdown)
+        all_warnings.extend(mismatch_warnings)
+    except Exception as e:
+        logger.error(f"[LabValidator] 双源数值对账异常: {type(e).__name__}: {e}")
+
+    if all_warnings:
+        logger.info(
+            f"[LabValidator] 共发现 {len(all_warnings)} 个数值告警 "
+            f"(位移={sum(1 for w in all_warnings if w.warning_type == 'decimal_shift')}, "
+            f"对账={sum(1 for w in all_warnings if w.warning_type == 'value_mismatch')})"
+        )
+    else:
+        logger.info("[LabValidator] ✅ 数值校验通过，未发现异常")
+
+    return [w.to_dict() for w in all_warnings]
