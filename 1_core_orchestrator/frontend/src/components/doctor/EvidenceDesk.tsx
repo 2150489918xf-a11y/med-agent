@@ -12,6 +12,7 @@ import { ImagingViewer } from "@/components/doctor/ImagingViewer";
 import { Streamdown } from "streamdown";
 import { streamdownPlugins } from "@/core/streamdown";
 import { LabMarkdownViewer } from "@/components/doctor/LabMarkdownViewer";
+import { BrainSpatialReview } from "@/components/doctor/BrainSpatialReview";
 import { toast } from "sonner";
 
 interface EvidenceDeskProps {
@@ -46,6 +47,9 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
         if (data.evidence.length > 0) {
           onTabChange("vitals"); // Default to vitals overview
         }
+      })
+      .catch((err) => {
+        console.error("[EvidenceDesk] Failed to fetch initial case data:", err);
       })
       .finally(() => setIsLoading(false));
 
@@ -143,6 +147,9 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
         method: "POST",
         body: formData
       });
+      if (!uploadRes.ok) {
+        throw new Error(`Upload failed with status ${uploadRes.status}`);
+      }
       const uploadData = await uploadRes.json();
       
       // 移除原有的手动 POST /evidence 逻辑，让后端的 _auto_sync_evidence 自动归档并提取 OCR 的动态标题
@@ -170,7 +177,10 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
   // 核心防止闪烁方案：外层容器负责开启拖拽，开启后由全屏的全覆盖遮罩接管所有后续事件
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    setIsDragging(true);
+    // 只有当拖拽内容包含文件时，才触发遮罩层（避免拖拽选中文本时触发）
+    if (e.dataTransfer.types && e.dataTransfer.types.includes("Files")) {
+      setIsDragging(true);
+    }
   };
   
   // onDragOver 在外层只做默认拦截，具体 drop 和 leave 交给 overlay 处理
@@ -603,12 +613,24 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
         )}
 
         {activeTabData?.type === "imaging" && (
-          <ImagingViewer 
-             reportId={activeTabData.item?.evidence_id} 
-             threadId={caseData?.patient_thread_id}
-             imagePath={activeTabData.item?.file_path} 
-             initialStructuredData={activeTabData.item?.structured_data} 
-          />
+          <>
+            {activeTabData.item?.structured_data?.pipeline === "brain_nifti_v1" ? (
+              <BrainSpatialReview 
+                spatialInfo={activeTabData.item.structured_data.spatial_info}
+                slicePngPath={activeTabData.item.structured_data.slice_png_path}
+                evidenceId={activeTabData.item.evidence_id}
+                caseId={caseId || ""}
+                status={activeTabData.item.structured_data.status}
+              />
+            ) : (
+              <ImagingViewer 
+                 reportId={activeTabData.item?.evidence_id} 
+                 threadId={caseData?.patient_thread_id}
+                 imagePath={activeTabData.item?.file_path} 
+                 initialStructuredData={activeTabData.item?.structured_data} 
+              />
+            )}
+          </>
         )}
 
         {(activeTabData?.type === "lab" || activeTabData?.type === "ecg" || activeTabData?.type === "note") && (
@@ -633,7 +655,8 @@ export function EvidenceDesk({ activeTab, onTabChange, isReviewPassed, onReviewP
                    isAbnormal={activeTabData.item?.is_abnormal}
                    evidenceId={activeTabData.item?.evidence_id}
                    caseId={caseId}
-                    ocrRawNumbers={activeTabData.item?.structured_data?.ocr_raw_numbers as string[] | undefined}
+                   ocrRawNumbers={activeTabData.item?.structured_data?.ocr_raw_numbers as string[] | undefined}
+                   valueWarnings={activeTabData.item?.structured_data?.value_warnings}
                  />
                );
              })()}

@@ -7,7 +7,7 @@ Provides REST API for the frontend to:
 """
 
 import json
-import logging
+from loguru import logger
 from pathlib import Path
 from typing import Any
 
@@ -23,13 +23,11 @@ from app.gateway.services.case_db import (
     get_case_by_thread,
 )
 
-logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/threads/{thread_id}/imaging-reports",
     tags=["imaging-reports"],
 )
-
 
 def _get_reports_dir(thread_id: str) -> Path:
     """Get the imaging-reports directory for a thread."""
@@ -39,11 +37,9 @@ def _get_reports_dir(thread_id: str) -> Path:
     reports_dir.mkdir(parents=True, exist_ok=True)
     return reports_dir
 
-
 class DoctorReviewSubmission(BaseModel):
     """Doctor's review submission."""
     doctor_result: dict[str, Any]
-
 
 @router.get("")
 def list_imaging_reports(
@@ -74,7 +70,6 @@ def list_imaging_reports(
 
     return {"reports": reports, "total": len(reports)}
 
-
 @router.get("/{report_id}")
 def get_imaging_report(thread_id: str, report_id: str):
     """Get a specific imaging report by ID."""
@@ -93,7 +88,6 @@ def get_imaging_report(thread_id: str, report_id: str):
         raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
 
     return report
-
 
 @router.put("/{report_id}")
 def submit_doctor_review(
@@ -143,16 +137,13 @@ def submit_doctor_review(
     logger.info(f"[HITL] Report {report_id} reviewed by doctor and synced to DB")
     return {"status": "ok", "report_id": report_id, "data": updated_report}
 
-
 class GenerateDraftRequest(BaseModel):
     doctor_result: dict[str, Any]
     prompt: str | None = None
 
-
 class AnalyzeCVRequest(BaseModel):
     image_url: str | None = None
     enable_sam: bool = False
-
 
 @router.post("/analyze-cv")
 async def stateless_analyze_cv(thread_id: str, payload: AnalyzeCVRequest | None = None):
@@ -266,7 +257,6 @@ async def stateless_analyze_cv(thread_id: str, payload: AnalyzeCVRequest | None 
     
     logger.info(f"[HITL] Analysis complete. Saved to {report_file.name}")
     return {"status": "ok", "report_id": report_id, "data": generated_data}
-
 
 @router.post("/generate-draft")
 async def generate_text_draft(thread_id: str, request: GenerateDraftRequest):

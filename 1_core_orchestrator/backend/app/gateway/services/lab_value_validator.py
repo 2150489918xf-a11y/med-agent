@@ -98,8 +98,8 @@ def _try_decimal_shifts(value: float) -> list[float]:
     return candidates
 
 
-def detect_decimal_shift_errors(markdown_text: str) -> list[ValueWarning]:
-    """从已清洗的 Markdown 表格中检测小数点位移错误。
+def detect_decimal_shift_errors(markdown_text: str) -> tuple[list[ValueWarning], str]:
+    """从已清洗的 Markdown 表格中检测小数点位移错误并剥离隐藏列。
 
     检测逻辑：
     1. 解析表格的每一行，提取「项目名」「结果值」「箭头标记」「参考区间」
@@ -123,23 +123,37 @@ def detect_decimal_shift_errors(markdown_text: str) -> list[ValueWarning]:
                 break
 
     if table_start < 0:
-        return warnings  # 没有找到表格
+        return warnings, markdown_text  # 没有找到表格
 
     # 获取表头行来定位列索引
     header_line = lines[table_start - 2].strip() if table_start >= 2 else ""
     header_cells = [c.strip() for c in header_line[1:-1].split("|")] if header_line.startswith("|") else []
 
-    # 尝试智能定位「结果」列和「参考区间」列的索引
-    result_col_idx = _find_column_index(header_cells, ["结果", "result", "检验结果", "检测结果"])
+    # 尝试智能定位「结果」列、「参考区间」列、「项目名」列、以及隐身通信列「数据类型」
+    result_col_idx = _find_column_index(header_cells, ["结果", "result", "检验结果", "检测结果", "测定值", "检测值"])
     ref_col_idx = _find_column_index(header_cells, ["参考区间", "参考范围", "参考值", "reference", "正常范围", "正常值"])
     name_col_idx = _find_column_index(header_cells, ["检验项目", "项目", "项目名称", "名称", "item", "测试项目"])
+    type_col_idx = _find_column_index(header_cells, ["数据类型", "类型", "type"])
 
     # 如果无法定位到关键列，放弃检测
     if result_col_idx is None or ref_col_idx is None:
         logger.debug("[LabValidator] 无法定位结果列或参考区间列，跳过小数点位移检测")
-        return warnings
+        return warnings, markdown_text
+        
+    cleaned_lines = list(lines)
 
-    # 逐行解析数据
+    # 剥离隐藏通信列「数据类型」
+    if type_col_idx is not None:
+        for i in range(table_start - 2, len(cleaned_lines)):
+            line = cleaned_lines[i].strip()
+            if not (line.startswith("|") and line.endswith("|")):
+                continue
+            cells = [c.strip() for c in line[1:-1].split("|")]
+            if type_col_idx < len(cells):
+                del cells[type_col_idx]
+                cleaned_lines[i] = "|" + "|".join(f" {c} " if not re.match(r'^[\s\-:]+$', c) else c for c in cells) + "|"
+
+    # 逐行解析数据 (继续使用未经改动的 lines 确保下标坐标正确)
     for i in range(table_start, len(lines)):
         line = lines[i].strip()
         if not (line.startswith("|") and line.endswith("|")):
@@ -152,23 +166,51 @@ def detect_decimal_shift_errors(markdown_text: str) -> list[ValueWarning]:
         # 提取项目名
         item_name = cells[name_col_idx] if name_col_idx is not None and name_col_idx < len(cells) else f"第{i}行"
 
-        # 提取结果值和箭头
-        result_cell = cells[result_col_idx]
-        has_up_arrow = "↑" in result_cell
-        has_down_arrow = "↓" in result_cell
+        # 提取结果值、参考区间
+        result_cell_raw = cells[result_col_idx]
+        ref_cell = cells[ref_col_idx]
+        ref_low, ref_high = _parse_reference_range(ref_cell)
+        
+        # HITL 双锁防呆机制：判断是否应该执行「纯数字粘连」洗刷
+        # 1. 大模型认为是数值 2. 参考区间能被成功解析出数学边界
+        data_type_cell = cells[type_col_idx] if type_col_idx is not None and type_col_idx < len(cells) else ""
+        is_llm_numeric = "数值" in data_type_cell
+        is_ref_math_bounded = ref_low is not None or ref_high is not None
+        
+        result_cell_cleaned = result_cell_raw
+        if is_llm_numeric and is_ref_math_bounded:
+            # 执行洗刷沙盘推演
+            stickiness_map = str.maketrans('oOlIsSBZz', '001155822')
+            cleaned_suggestion = result_cell_raw.translate(stickiness_map)
+            
+            if cleaned_suggestion != result_cell_raw:
+                warnings.append(ValueWarning(
+                    item_name=item_name,
+                    warning_type="alphanumeric_blur",
+                    severity="high",
+                    message=f"「{item_name}」的结果 {result_cell_raw} 遭到英文字母粘连，系统建议修正为 {cleaned_suggestion}",
+                    details={
+                        "original_value": result_cell_raw,
+                        "suggestion": cleaned_suggestion,
+                        "row_index": i - table_start,
+                        "col_index": result_col_idx
+                    }
+                ))
+                # 注意：我们这里使用洗刷后的值继续向下走数学检测，但不对 markdown 文本做物理篡改（保留给 HITL 一键修复）
+                result_cell_cleaned = cleaned_suggestion
+
+        # 继续用清理后的值进行逻辑校验（防止 "5.O" 弄阻断了 float() 转换）
+        has_up_arrow = "↑" in result_cell_cleaned
+        has_down_arrow = "↓" in result_cell_cleaned
         has_arrow = has_up_arrow or has_down_arrow
 
-        # 提取纯数值
-        num_match = re.search(r'(\d+\.?\d*)', result_cell)
+        # 提取纯数值用于移位检测
+        num_match = re.search(r'(\d+\.?\d*)', result_cell_cleaned)
         if not num_match:
             continue
         result_value = float(num_match.group(1))
 
-        # 提取参考区间
-        ref_cell = cells[ref_col_idx]
-        ref_low, ref_high = _parse_reference_range(ref_cell)
-
-        # 如果参考区间无法解析，跳过
+        # 如果参考区间无法解析，跳过 (这部分已前置)
         if ref_low is None and ref_high is None:
             continue
 
@@ -204,6 +246,8 @@ def detect_decimal_shift_errors(markdown_text: str) -> list[ValueWarning]:
                         "arrow": arrow_symbol,
                         "candidates": plausible,
                         "conflict": "arrow_but_in_range",
+                        "row_index": i - table_start,
+                        "col_index": result_col_idx
                     },
                 ))
 
@@ -230,6 +274,8 @@ def detect_decimal_shift_errors(markdown_text: str) -> list[ValueWarning]:
                         "direction": direction,
                         "candidates": plausible,
                         "conflict": "no_arrow_but_out_of_range",
+                        "row_index": i - table_start,
+                        "col_index": result_col_idx
                     },
                 ))
             else:
@@ -259,7 +305,7 @@ def detect_decimal_shift_errors(markdown_text: str) -> list[ValueWarning]:
             + ", ".join(w.item_name for w in warnings)
         )
 
-    return warnings
+    return warnings, "\n".join(cleaned_lines)
 
 
 # ── 策略二：PaddleOCR vs Qwen 双源数值对账 ──────────────────
@@ -405,7 +451,7 @@ def _is_likely_serial_number(value_str: str) -> bool:
 def validate_lab_values(
     cleaned_markdown: str,
     ocr_raw_numbers: list[str],
-) -> list[dict]:
+) -> tuple[str, list[dict]]:
     """化验单数值校验的统一入口。
 
     同时运行两个策略：
@@ -417,13 +463,14 @@ def validate_lab_values(
         ocr_raw_numbers: PaddleOCR 原始数值指纹列表
 
     Returns:
-        告警字典列表，每个字典包含 item_name, warning_type, severity, message, details
+        (剔除通信列后的纯净Markdown字符串, 告警字典列表)
     """
     all_warnings: list[ValueWarning] = []
+    final_markdown = cleaned_markdown
 
     # 策略一：小数点位移检测
     try:
-        decimal_warnings = detect_decimal_shift_errors(cleaned_markdown)
+        decimal_warnings, final_markdown = detect_decimal_shift_errors(cleaned_markdown)
         all_warnings.extend(decimal_warnings)
     except Exception as e:
         logger.error(f"[LabValidator] 小数点位移检测异常: {type(e).__name__}: {e}")
@@ -444,4 +491,4 @@ def validate_lab_values(
     else:
         logger.info("[LabValidator] ✅ 数值校验通过，未发现异常")
 
-    return [w.to_dict() for w in all_warnings]
+    return final_markdown, [w.to_dict() for w in all_warnings]

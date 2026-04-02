@@ -9,7 +9,7 @@
 """
 
 import json
-import logging
+from loguru import logger
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -17,10 +17,8 @@ from pydantic import BaseModel
 
 from app.core.config.paths import get_paths
 
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/threads/{thread_id}", tags=["appointment"])
-
 
 # ── Request / Response Models ──────────────────────────────
 
@@ -28,7 +26,6 @@ class EvidenceSelection(BaseModel):
     """Evidence item selected (or deselected) by the patient."""
     id: str
     selected: bool = True
-
 
 class ConfirmAppointmentRequest(BaseModel):
     """Patient-confirmed appointment data (may be edited from original preview)."""
@@ -38,7 +35,6 @@ class ConfirmAppointmentRequest(BaseModel):
     department: str | None = None
     reason: str = ""
 
-
 class ConfirmAppointmentResponse(BaseModel):
     """Response after successful registration."""
     success: bool
@@ -47,7 +43,6 @@ class ConfirmAppointmentResponse(BaseModel):
     department: str | None
     evidence_count: int
     message: str
-
 
 # ── Preview Endpoint ───────────────────────────────────────
 
@@ -126,7 +121,6 @@ async def get_appointment_preview(thread_id: str) -> dict:
         "patient_info": patient_info,
         "evidence_items": evidence_items,
     }
-
 
 # ── Confirm Endpoint ───────────────────────────────────────
 

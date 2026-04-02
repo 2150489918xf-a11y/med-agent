@@ -14,13 +14,12 @@
 依赖：confidence_policy.py（按病种阈值注册表）
 """
 
-import logging
+from loguru import logger
 from typing import Any
 
 from .confidence_policy import get_policy
 from .analyzer_registry import AnalysisResult
 
-logger = logging.getLogger(__name__)
 
 
 def apply_circuit_breaker(result: AnalysisResult) -> AnalysisResult:

@@ -13,12 +13,11 @@
 
 import asyncio
 import cv2
-import logging
+from loguru import logger
 import numpy as np
 from functools import lru_cache
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
 
 # 中文分类标签（Chinese-CLIP 原生支持中文）
 # 提高区分度，防止胸片被误判为临床照片
@@ -31,12 +30,10 @@ CATEGORY_MAP = {
     "其他无关日常图片": "other",
 }
 
-
 def _imread_unicode(path: str) -> np.ndarray | None:
     """读取图片（兼容中文路径）"""
     data = np.fromfile(path, dtype=np.uint8)
     return cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
-
 
 def _imwrite_unicode(path: str, img: np.ndarray) -> bool:
     """写入图片（兼容中文路径）"""
@@ -45,7 +42,6 @@ def _imwrite_unicode(path: str, img: np.ndarray) -> bool:
     if success:
         buf.tofile(path)
     return success
-
 
 @lru_cache(maxsize=1)
 def _load_classifier():
@@ -57,13 +53,11 @@ def _load_classifier():
         model="OFA-Sys/chinese-clip-vit-base-patch16",
     )
 
-
 def warmup():
     """Gateway 启动时调用，预热模型（避免首次上传卡顿）"""
     logger.info("正在预热 Chinese-CLIP 模型...")
     _load_classifier()
     logger.info("Chinese-CLIP 模型预热完成")
-
 
 def _classify_sync(image_path: str) -> dict:
     """同步分类（在线程池中执行）"""
@@ -75,11 +69,9 @@ def _classify_sync(image_path: str) -> dict:
         "confidence": round(float(results[0]["score"]), 3),
     }
 
-
 async def classify_image(path: str) -> dict:
     """异步分类（线程池隔离，不阻塞事件循环）"""
     return await asyncio.to_thread(_classify_sync, path)
-
 
 def enhance_lab_report(src: str, dst: str) -> str:
     """化验单增强：去噪 + 自适应二值化 → 清晰黑白扫描件"""
@@ -92,7 +84,6 @@ def enhance_lab_report(src: str, dst: str) -> str:
     )
     _imwrite_unicode(dst, binary)
     return dst
-
 
 def enhance_medical_imaging(src: str, dst: str) -> str:
     """医学影像增强：CLAHE 锐化"""

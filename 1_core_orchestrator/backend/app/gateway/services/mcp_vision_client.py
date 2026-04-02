@@ -7,9 +7,8 @@ communicate with the standalone MCP Vision service (Port 8002) through this modu
 
 import os
 import json
-import logging
+from loguru import logger
 
-logger = logging.getLogger(__name__)
 
 MCP_VISION_URL = os.getenv("MCP_VISION_URL", "http://127.0.0.1:8002/sse")
 
@@ -47,7 +46,6 @@ async def analyze_xray(image_path: str, enable_sam: bool = False) -> dict:
     except Exception as e:
         logger.error(f"MCP Vision call failed: {e}")
         raise
-
 
 async def check_health() -> bool:
     """Check if the standalone MCP Vision service is online."""

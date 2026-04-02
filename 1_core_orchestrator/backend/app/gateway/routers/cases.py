@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+from loguru import logger
 import time
 from datetime import datetime, timezone
 
@@ -31,7 +31,6 @@ from app.gateway.models.case import (
 )
 from app.gateway.services import case_db
 
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["cases"])
 
@@ -39,7 +38,6 @@ router = APIRouter(prefix="/api", tags=["cases"])
 # Simple in-process pub/sub for SSE. Sufficient for single-server MVP.
 
 _sse_subscribers: list[asyncio.Queue] = []
-
 
 def _broadcast_event(event_type: str, data: dict):
     """Push an event to all connected SSE subscribers."""
@@ -53,7 +51,6 @@ def _broadcast_event(event_type: str, data: dict):
     for q in dead:
         _sse_subscribers.remove(q)
 
-
 # ── Case CRUD ──────────────────────────────────────────────
 
 @router.post("/cases")
@@ -66,7 +63,6 @@ async def create_case(req: CreateCaseRequest):
         "chief_complaint": case.patient_info.chief_complaint or "未填写",
     })
     return case.model_dump()
-
 
 @router.get("/cases")
 async def list_cases(
@@ -84,6 +80,50 @@ async def list_cases(
         "counts": counts,
     }
 
+# ── SSE Real-Time Stream ──────────────────────────────────
+
+@router.get("/cases/stream")
+async def case_event_stream():
+    """
+    SSE endpoint for real-time case queue updates.
+
+    Events:
+    - new_case: A new patient case was created
+    - status_change: A case changed status
+    - new_evidence: New evidence was added to a case
+    - diagnosed: A case received a doctor diagnosis
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    _sse_subscribers.append(queue)
+
+    async def event_generator():
+        try:
+            # Send initial heartbeat
+            yield f"data: {json.dumps({'type': 'connected', 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
+
+            while True:
+                try:
+                    # Wait for events with a 30s heartbeat timeout
+                    payload = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {payload}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive ping
+                    yield f": keepalive {int(time.time())}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if queue in _sse_subscribers:
+                _sse_subscribers.remove(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 @router.get("/cases/{case_id}")
 async def get_case(case_id: str):
@@ -92,7 +132,6 @@ async def get_case(case_id: str):
     if case is None:
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
     return case.model_dump()
-
 
 @router.patch("/cases/{case_id}/status")
 async def update_case_status(case_id: str, req: UpdateStatusRequest):
@@ -105,7 +144,6 @@ async def update_case_status(case_id: str, req: UpdateStatusRequest):
         "new_status": req.status.value,
     })
     return case.model_dump()
-
 
 # ── Diagnosis Submission ──────────────────────────────────
 
@@ -125,7 +163,6 @@ async def submit_diagnosis(case_id: str, req: SubmitDiagnosisRequest):
     })
     return case.model_dump()
 
-
 # ── Patient Info Editing ───────────────────────────────────
 
 @router.patch("/cases/{case_id}/patient-info")
@@ -140,7 +177,6 @@ async def update_patient_info(case_id: str, req: UpdatePatientInfoRequest):
     _broadcast_event("patient_info_updated", {"case_id": case_id})
     return case.model_dump()
 
-
 # ── Evidence ───────────────────────────────────────────────
 
 @router.get("/cases/{case_id}/evidence")
@@ -150,7 +186,6 @@ async def list_evidence(case_id: str):
     if case is None:
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
     return {"evidence": [e.model_dump() for e in case.evidence], "total": len(case.evidence)}
-
 
 @router.post("/cases/{case_id}/evidence")
 async def add_evidence(case_id: str, req: AddEvidenceRequest):
@@ -164,7 +199,6 @@ async def add_evidence(case_id: str, req: AddEvidenceRequest):
         "title": req.title,
     })
     return {"status": "ok", "total_evidence": len(case.evidence)}
-
 
 from app.gateway.models.case import UpdateEvidenceRequest
 
@@ -182,7 +216,6 @@ async def update_evidence(case_id: str, evidence_id: str, req: UpdateEvidenceReq
     _broadcast_event("evidence_updated", {"case_id": case_id, "evidence_id": evidence_id})
     return case.model_dump()
 
-
 @router.delete("/cases/{case_id}/evidence/{evidence_id}")
 async def delete_evidence(case_id: str, evidence_id: str):
     """Delete a specific evidence item from a case."""
@@ -192,7 +225,6 @@ async def delete_evidence(case_id: str, evidence_id: str):
         
     _broadcast_event("evidence_deleted", {"case_id": case_id, "evidence_id": evidence_id})
     return {"status": "ok", "message": "Evidence deleted successfully", "case": case.model_dump()}
-
 
 # ── Diagnosis ──────────────────────────────────────────────
 
@@ -208,14 +240,12 @@ async def submit_diagnosis(case_id: str, req: SubmitDiagnosisRequest):
     })
     return case.model_dump()
 
-
 # ── Statistics ──────────────────────────────────────────────
 
 @router.get("/doctor/stats")
 async def get_doctor_stats():
     """Aggregate statistics for the doctor dashboard."""
     return case_db.get_stats()
-
 
 # ── Case Summary for AI Synthesis (Gap④) ──────────────────
 
@@ -299,7 +329,6 @@ async def get_case_summary(case_id: str):
         "has_diagnosis": case.diagnosis is not None,
     }
 
-
 # ── Patient-Side Case Lookup ───────────────────────────────
 
 @router.get("/cases/by-thread/{thread_id}")
@@ -314,48 +343,3 @@ async def get_case_by_thread(thread_id: str):
         raise HTTPException(status_code=404, detail=f"No case found for thread {thread_id}")
     return case.model_dump()
 
-
-# ── SSE Real-Time Stream ──────────────────────────────────
-
-@router.get("/cases/stream")
-async def case_event_stream():
-    """
-    SSE endpoint for real-time case queue updates.
-
-    Events:
-    - new_case: A new patient case was created
-    - status_change: A case changed status
-    - new_evidence: New evidence was added to a case
-    - diagnosed: A case received a doctor diagnosis
-    """
-    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-    _sse_subscribers.append(queue)
-
-    async def event_generator():
-        try:
-            # Send initial heartbeat
-            yield f"data: {json.dumps({'type': 'connected', 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
-
-            while True:
-                try:
-                    # Wait for events with a 30s heartbeat timeout
-                    payload = await asyncio.wait_for(queue.get(), timeout=30.0)
-                    yield f"data: {payload}\n\n"
-                except asyncio.TimeoutError:
-                    # Send keepalive ping
-                    yield f": keepalive {int(time.time())}\n\n"
-        except asyncio.CancelledError:
-            pass
-        finally:
-            if queue in _sse_subscribers:
-                _sse_subscribers.remove(queue)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )

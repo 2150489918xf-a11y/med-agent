@@ -57,11 +57,11 @@ class LabOCRAnalyzer:
              if extracted_title:
                  evidence_title = extracted_title
 
-        # Step 3: [ADR-036] 数值校验——小数点位移检测 + 双源对账
-        # 校验器是纯函数，不修改 ocr_markdown，仅产出告警列表
+        # Step 3: [ADR-036] 数值校验——小数点位移检测 + 双源对账 + 字母粘连清理
+        # 校验器会生成告警列表，并返回剔除了隐身通信列的合法 Markdown
         value_warnings: list[dict] = []
         if ocr_markdown:
-            value_warnings = validate_lab_values(ocr_markdown, ocr_raw_numbers)
+            ocr_markdown, value_warnings = validate_lab_values(ocr_markdown, ocr_raw_numbers)
 
         # 构建 structured_data，同时存储原始数值指纹和校验告警
         structured = {}

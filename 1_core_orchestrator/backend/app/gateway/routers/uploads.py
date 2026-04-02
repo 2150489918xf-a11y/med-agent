@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-import logging
+from loguru import logger
 import sys
 import uuid
 from pathlib import Path
@@ -28,9 +28,9 @@ from app.core.utils.file_conversion import CONVERTIBLE_EXTENSIONS, convert_file_
 from app.gateway.services.analyzer_registry import AnalysisResult
 from app.gateway.services.parallel_analyzer import analyze_batch
 
-logger = logging.getLogger(__name__)
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
+NIFTI_EXTS = {".nii"}
 
 # 文件类型 → Evidence 类型映射（非图像文件根据扩展名推断）
 _DOC_EXTS = {".pdf", ".doc", ".docx", ".txt", ".md", ".csv", ".xls", ".xlsx"}
@@ -43,7 +43,6 @@ class UploadResponse(BaseModel):
     success: bool
     files: list[dict[str, str]]
     message: str
-
 
 @router.post("", response_model=UploadResponse)
 async def upload_files(
@@ -159,7 +158,6 @@ async def upload_files(
         message=f"Successfully uploaded {len(uploaded_files)} file(s)",
     )
 
-
 async def _auto_sync_evidence(thread_id: str, uploaded_files: list[dict], analysis_results: list[AnalysisResult]) -> None:
     """[Gap①] 上传完成后，自动将分析结果回写到 Case 的 evidence 数组。"""
     from app.gateway.services.case_db import get_case_by_thread, add_evidence
@@ -197,9 +195,15 @@ async def _auto_sync_evidence(thread_id: str, uploaded_files: list[dict], analys
                  if ocr_sidecar.exists():
                      ai_analysis_text = ocr_sidecar.read_text(encoding="utf-8")
 
+            def _detect_nifti(filename: str) -> bool:
+                return filename.endswith(".nii.gz") or filename.endswith(".nii")
+
             if file_ext in IMAGE_EXTS:
                 ev_type = "imaging"
                 evidence_title = "胸部X光片"
+            elif _detect_nifti(filename):
+                ev_type = "imaging"
+                evidence_title = "脑部核磁共振 (MRI NIfTI)"
             elif file_ext in _DOC_EXTS:
                 ev_type = "note"
                 evidence_title = filename
@@ -243,7 +247,6 @@ async def _auto_sync_evidence(thread_id: str, uploaded_files: list[dict], analys
             add_evidence(case.case_id, req)
             logger.info(f"[Gap①] Auto-synced evidence: {filename} → {ev_type} for case {case.case_id}")
 
-
 @router.get("/list", response_model=dict)
 async def list_uploaded_files(thread_id: str) -> dict:
     """List all files in a thread's uploads directory."""
@@ -266,7 +269,6 @@ async def list_uploaded_files(thread_id: str) -> dict:
         f["path"] = str(sandbox_uploads / f["filename"])
 
     return result
-
 
 @router.delete("/{filename}")
 async def delete_uploaded_file(thread_id: str, filename: str) -> dict:

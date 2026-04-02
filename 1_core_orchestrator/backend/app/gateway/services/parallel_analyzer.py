@@ -1,20 +1,18 @@
 """Parallel execution engine for handling multiple uploaded files."""
 
 import asyncio
-import logging
+from loguru import logger
 import os
 from typing import Callable, Sequence, Awaitable
 
 from .analyzer_registry import AnalysisResult, get_analyzers_for
 from .circuit_breaker import apply_circuit_breaker
 
-logger = logging.getLogger(__name__)
 
 # [ADR-025] Constraint: 8GB VRAM environment -> Run GPU-intensive tasks sequentially
 # Configurable via .env file depending on the deployment hardware
 _gpu_concurrency = int(os.getenv("MAX_GPU_CONCURRENCY", "1"))
 _gpu_semaphore = asyncio.Semaphore(_gpu_concurrency)
-
 
 async def analyze_single_file(
     file_path: str,
@@ -74,7 +72,6 @@ async def analyze_single_file(
             analyzer_name=spec.name, evidence_type="note",
             evidence_title=filename, error=str(e),
         )
-
 
 async def analyze_batch(
     files: Sequence[dict],

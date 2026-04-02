@@ -11,7 +11,7 @@ Design decisions (ADR-008):
 from __future__ import annotations
 
 import json
-import logging
+from loguru import logger
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -28,7 +28,6 @@ from app.gateway.models.case import (
     AddEvidenceRequest,
 )
 
-logger = logging.getLogger(__name__)
 
 # ── Database location ──────────────────────────────────────
 # Stored alongside the orchestrator data, not inside thread dirs.
@@ -37,7 +36,6 @@ _DB_PATH = _DB_DIR / "data" / "cases.db"
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
-
 
 def _get_conn() -> sqlite3.Connection:
     """Lazy-init the SQLite connection and ensure the table exists."""
@@ -95,7 +93,6 @@ def _get_conn() -> sqlite3.Connection:
     logger.info(f"Case DB initialized at {_DB_PATH}")
     return _conn
 
-
 # ── CRUD ──────────────────────────────────────────────────
 
 def create_case(req: CreateCaseRequest) -> Case:
@@ -125,7 +122,6 @@ def create_case(req: CreateCaseRequest) -> Case:
     logger.info(f"Created case {case.case_id} for thread {case.patient_thread_id}")
     return case
 
-
 def get_case(case_id: str) -> Case | None:
     """Fetch a single case by ID."""
     with _lock:
@@ -134,7 +130,6 @@ def get_case(case_id: str) -> Case | None:
     if row is None:
         return None
     return Case.model_validate_json(row[0])
-
 
 def list_cases(
     status: CaseStatus | None = None,
@@ -171,7 +166,6 @@ def list_cases(
         rows = conn.execute(query, params).fetchall()
     return [Case.model_validate_json(row[0]) for row in rows]
 
-
 def count_cases(status: CaseStatus | None = None) -> int:
     """Count cases, optionally filtered by status."""
     query = "SELECT COUNT(*) FROM cases WHERE 1=1"
@@ -184,7 +178,6 @@ def count_cases(status: CaseStatus | None = None) -> int:
         conn = _get_conn()
         row = conn.execute(query, params).fetchone()
     return row[0] if row else 0
-
 
 def update_case_status(case_id: str, new_status: CaseStatus, doctor_thread_id: str | None = None) -> Case | None:
     """Transition a case to a new status."""
@@ -205,7 +198,6 @@ def update_case_status(case_id: str, new_status: CaseStatus, doctor_thread_id: s
         )
         conn.commit()
     return case
-
 
 def submit_diagnosis(case_id: str, req: SubmitDiagnosisRequest) -> Case | None:
     """Submit a doctor's diagnosis and transition the case to 'diagnosed'.
@@ -237,7 +229,6 @@ def submit_diagnosis(case_id: str, req: SubmitDiagnosisRequest) -> Case | None:
         conn.commit()
     return case
 
-
 def add_evidence(case_id: str, req: AddEvidenceRequest) -> Case | None:
     """Append an evidence item to a case."""
     case = get_case(case_id)
@@ -268,7 +259,6 @@ def add_evidence(case_id: str, req: AddEvidenceRequest) -> Case | None:
         conn.commit()
     return case
 
-
 def update_evidence_data(case_id: str, evidence_id: str, updates: dict) -> Case | None:
     """Update specific fields of an existing evidence item within a case."""
     case = get_case(case_id)
@@ -295,7 +285,6 @@ def update_evidence_data(case_id: str, evidence_id: str, updates: dict) -> Case 
             conn.commit()
     return case
 
-
 def remove_evidence(case_id: str, evidence_id: str) -> Case | None:
     """Remove an evidence item from a case by its ID."""
     case = get_case(case_id)
@@ -317,7 +306,6 @@ def remove_evidence(case_id: str, evidence_id: str) -> Case | None:
         )
         conn.commit()
     return case
-
 
 def update_patient_info(thread_id: str, info_dict: dict) -> Case | None:
     """Update patient info on an existing Case. Returns None if no Case exists.
@@ -347,7 +335,6 @@ def update_patient_info(thread_id: str, info_dict: dict) -> Case | None:
         conn.commit()
     return target_case
 
-
 def update_patient_info_by_case(case_id: str, info_dict: dict) -> Case | None:
     """Update patient info on an existing Case by case_id (doctor-side).
     
@@ -374,7 +361,6 @@ def update_patient_info_by_case(case_id: str, info_dict: dict) -> Case | None:
         conn.commit()
     return case
 
-
 def get_case_by_thread(thread_id: str) -> Case | None:
     """Find the active Case for a given patient thread_id.
     
@@ -390,7 +376,6 @@ def get_case_by_thread(thread_id: str) -> Case | None:
     if row:
         return Case.model_validate_json(row[0])
     return None
-
 
 def update_case_evidence_from_report(thread_id: str, report_id: str, doctor_result: dict) -> bool:
     """Sync the doctor's review back to the macro Case.evidence array."""
@@ -421,7 +406,6 @@ def update_case_evidence_from_report(thread_id: str, report_id: str, doctor_resu
         return True
     return False
 
-
 def submit_diagnosis(case_id: str, req: SubmitDiagnosisRequest) -> Case | None:
     """Submit doctor's diagnosis and transition case to 'diagnosed'."""
     case = get_case(case_id)
@@ -448,7 +432,6 @@ def submit_diagnosis(case_id: str, req: SubmitDiagnosisRequest) -> Case | None:
         conn.commit()
     logger.info(f"Diagnosis submitted for case {case_id}")
     return case
-
 
 def get_stats() -> dict:
     """Aggregate statistics for the doctor dashboard."""
@@ -497,7 +480,6 @@ def get_stats() -> dict:
         "abnormal_evidence_count": abnormal_count,
         "top_diagnoses": [{"name": k, "count": v} for k, v in top_diagnoses],
     }
-
 
 # ── Rerports & HITL Audit ─────────────────────────────────
 

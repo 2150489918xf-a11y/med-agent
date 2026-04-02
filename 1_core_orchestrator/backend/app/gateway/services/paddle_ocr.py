@@ -13,19 +13,17 @@
 """
 
 import base64
-import logging
+from loguru import logger
 import os
 import re
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-logger = logging.getLogger(__name__)
 
 SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/chat/completions"
 # 默认使用该模型，可以在 .env 中动态覆盖
 MODEL_NAME = os.getenv("SILICONFLOW_OCR_MODEL", "PaddlePaddle/PaddleOCR-VL-1.5")
-
 
 def _extract_title_from_markdown(md_text: str) -> str | None:
     """从 Markdown 文本中提取第一个标题（# 或 ## 开头的行）作为证据标题"""
@@ -36,7 +34,6 @@ def _extract_title_from_markdown(md_text: str) -> str | None:
         if stripped.startswith("## "):
             return stripped.lstrip("# ").strip()
     return None
-
 
 def _has_markdown_table(text: str) -> bool:
     """检测文本中是否已经包含 Markdown 表格语法（竖线分隔 + 分隔行）"""
@@ -52,7 +49,6 @@ def _has_markdown_table(text: str) -> bool:
             if cells and all(re.match(r'^[\s\-:]+$', c) for c in cells):
                 has_separator = True
     return pipe_lines >= 3 and has_separator
-
 
 def _fix_arrow_placement(md: str) -> str:
     """确定性后处理：将参考区间列里的 ↑/↓ 箭头移到结果列。
@@ -75,22 +71,38 @@ def _fix_arrow_placement(md: str) -> str:
             fixed_lines.append(line)
             continue
 
+        new_cells = []
         modified = False
         for i in range(len(cells)):
             cell = cells[i].strip()
+            # 模式3：大模型多生成了一列专门放箭头，必须把箭头合并回去并销毁这个幽灵列
+            if cell in ["↑", "↓"]:
+                if len(new_cells) > 0:
+                    prev = new_cells[-1].strip()
+                    if prev and not prev.endswith(cell):
+                        new_cells[-1] = f" {prev} {cell} "
+                    else:
+                        new_cells[-1] = f" {prev} "
+                modified = True
+                continue
+            
             # 检测此列以 ↑ 或 ↓ 开头的模式（箭头 + 数字范围 = 参考区间被污染）
             arrow_match = re.match(r'^([↑↓])\s*(.+)$', cell)
-            if arrow_match and i > 0:
+            if arrow_match and len(new_cells) > 0:
                 arrow = arrow_match.group(1)
                 rest = arrow_match.group(2).strip()
                 # 将箭头追加到前一列（结果列）
-                prev = cells[i - 1].strip()
+                prev = new_cells[-1].strip()
                 if prev and not prev.endswith(arrow):
-                    cells[i - 1] = f" {prev} {arrow} "
+                    new_cells[-1] = f" {prev} {arrow} "
                 else:
-                    cells[i - 1] = f" {prev} "
-                cells[i] = f" {rest} "
+                    new_cells[-1] = f" {prev} "
+                new_cells.append(f" {rest} ")
                 modified = True
+            else:
+                new_cells.append(f" {cell} ")
+                
+        cells = new_cells
 
         if modified:
             fixed_lines.append("|" + "|".join(cells) + "|")
@@ -98,7 +110,6 @@ def _fix_arrow_placement(md: str) -> str:
             fixed_lines.append(line)
 
     return "\n".join(fixed_lines)
-
 
 def _extract_lab_numbers(text: str) -> list[str]:
     """从 OCR 原始文本中提取检验数值指纹，用于与 LLM 清洗后数值交叉对账。
@@ -130,7 +141,6 @@ def _extract_lab_numbers(text: str) -> list[str]:
         result.append(n)
 
     return result
-
 
 @retry(
     stop=stop_after_attempt(2),
@@ -173,9 +183,10 @@ async def fetch_medical_report_ocr(image_path: str) -> tuple[str, list[str]]:
         "# 报告标题\n\n"
         "患者基本信息用列表格式列出。\n\n"
         "检验数据必须用 Markdown 表格输出，示例：\n"
-        "| 序号 | 检验项目 | 英文 | 结果 | 参考区间 | 单位 |\n"
-        "| --- | --- | --- | --- | --- | --- |\n"
-        "| 1 | 白细胞计数 | WBC | 5.55 | 3.5-9.5 | ×10⁹/L |\n\n"
+        "| 序号 | 检验项目 | 英文 | 结果 | 参考区间 | 单位 | 数据类型 |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| 1 | 白细胞计数 | WBC | 5.55 | 3.5-9.5 | ×10⁹/L | 数值 |\n"
+        "| 2 | 乙肝表面抗原 | HBsAg | 阴性 | 阴性 | | 文本 |\n\n"
         "单位中的乘号写 × 符号，异常值在结果后标注 ↑ 或 ↓。\n"
         "只输出 Markdown 文档，不要任何额外解释。"
     )
@@ -235,7 +246,6 @@ async def fetch_medical_report_ocr(image_path: str) -> tuple[str, list[str]]:
     logger.warning("[PaddleOCR] 清洗管道也失败了，使用原始文本降级包装")
     return f"## 原始识别结果\n\n{raw_text}\n\n> ⚠️ 以上内容由 VLM 自动识别，未能结构化排版。", ocr_raw_numbers
 
-
 async def _reformat_to_markdown(raw_text: str, api_key: str) -> str | None:
     """使用极速的 Qwen2.5-7B 将杂乱的 OCR 纯文本清洗为结构化 Markdown 文档。
 
@@ -249,18 +259,21 @@ async def _reformat_to_markdown(raw_text: str, api_key: str) -> str | None:
         "【输出格式要求】：\n"
         "1. 第一行必须是标题，用 # 开头（如：# 血常规检验报告）\n"
         "2. 患者信息、送检信息等用列表格式列出\n"
-        "3. 检验数据必须整理成 Markdown 表格（用 | 分隔列），表头包含：序号、检验项目、英文缩写、结果、参考区间、单位\n"
-        "4. 【极其重要】异常值的 ↑ 或 ↓ 箭头必须紧跟在'结果'列的数字后面，绝不能放在'参考区间'列！\n"
-        "   ✅ 正确：| 2 | 血红蛋白 | HGB | 109 ↓ | 130-175 | g/L |\n"
-        "   ❌ 错误：| 2 | 血红蛋白 | HGB | 109 | ↓130-175 | g/L |\n"
+        "3. 检验数据必须整理成 Markdown 表格语法的文本（用 | 分隔列），表头包含：序号、检验项目、英文缩写、结果、参考区间、单位、数据类型\n"
+        "4. 【极其重要】异常值的 ↑ 或 ↓ 箭头必须跟随在'结果'列的值里，绝不能单独拆成一列，也不能放在'参考区间'列！\n"
+        "   ✅ 正确：| 2 | 血红蛋白 | HGB | 109 ↓ | 130-175 | g/L | 数值 |\n"
+        "   ❌ 错误：| 2 | 血红蛋白 | HGB | 109  \| ↓130-175 | g/L | 数值 |\n"
+        "   ❌ 错误：| 2 | 血红蛋白 | HGB | 109  \| ↓ | 130-175 | g/L | 数值 |\n"
         "5. 单位中的乘号直接写 ×（Unicode），不要写 LaTeX 公式\n"
-        "6. 只输出 Markdown 文档本身，不要有任何额外解释或开场白\n\n"
-        "【Markdown 表格示例】：\n"
-        "| 序号 | 检验项目 | 英文 | 结果 | 参考区间 | 单位 |\n"
-        "| --- | --- | --- | --- | --- | --- |\n"
-        "| 1 | 白细胞计数 | WBC | 5.55 | 3.5-9.5 | ×10⁹/L |\n"
-        "| 2 | 血红蛋白 | HGB | 109 ↓ | 130-175 | g/L |\n"
-        "| 3 | 淋巴细胞百分数 | LY% | 17.5 ↓ | 20-50 | % |\n"
+        "6. 在表格最后一列，增加一个'数据类型'判定。如果这行检验报告的自然形式应该是数学数字，则填「数值」；如果是阴性、阳性、血型等则是「文本」\n"
+        "7. 只输出 Markdown 文档本身，不要有任何额外解释\n\n"
+        "【Markdown 表格正确示例】：\n"
+        "| 序号 | 检验项目 | 英文 | 结果 | 参考区间 | 单位 | 数据类型 |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| 1 | 白细胞计数 | WBC | 5.55 | 3.5-9.5 | ×10⁹/L | 数值 |\n"
+        "| 2 | 血红蛋白 | HGB | 109 ↓ | 130-175 | g/L | 数值 |\n"
+        "| 3 | 淋巴细胞百分数 | LY% | 17.5 ↓ | 20-50 | % | 数值 |\n"
+        "| 4 | 乙肝表面抗体 | 抗-HBs | 强阳性 | 阴性 | IU/L | 文本 |\n"
     )
 
     payload = {

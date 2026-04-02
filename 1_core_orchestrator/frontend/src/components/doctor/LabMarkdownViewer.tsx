@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { FileText, Columns2, AlignJustify, AlertTriangle, SearchCheck } from "lucide-react";
+import { FileText, Columns2, AlignJustify, AlertTriangle, SearchCheck, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Streamdown } from "streamdown";
 import { streamdownPlugins } from "@/core/streamdown";
@@ -15,6 +15,8 @@ interface LabMarkdownViewerProps {
   caseId?: string | null;
   /** [ADR-035] OCR 原始数值指纹，用于与 LLM 清洗后数值交叉对账 */
   ocrRawNumbers?: string[];
+  /** [ADR-037] 后端精确下发的值异常警告，包含行列索引与清理建议 */
+  valueWarnings?: any[];
 }
 
 /** 
@@ -180,13 +182,13 @@ function crossValidateNumbers(
 function EditableCell({ 
   value, 
   isAbnormal, 
-  warning,
+  warningObj,
   ocrMismatch,
   onChange 
 }: { 
   value: string; 
   isAbnormal?: boolean; 
-  warning?: string;
+  warningObj?: any;
   ocrMismatch?: string;
   onChange: (newVal: string) => void;
 }) {
@@ -209,23 +211,42 @@ function EditableCell({
     }
   }, []);
 
+  const tooltipText = warningObj?.message || ocrMismatch;
+  const suggestion = warningObj?.details?.suggestion || warningObj?.details?.candidates?.[0];
+
   return (
     <td
-      ref={ref}
-      contentEditable
-      suppressContentEditableWarning
-      onBlur={handleBlur}
-      onKeyDown={handleKeyDown}
       className={cn(
-        "px-4 py-2.5 text-slate-700 align-middle outline-none cursor-text",
-        "focus:bg-blue-50 focus:ring-2 focus:ring-inset focus:ring-blue-300 transition-all",
+        "px-4 py-2.5 text-slate-700 align-middle transition-all relative group/cell border-transparent",
         isAbnormal && "text-red-700 font-bold",
-        warning && "underline decoration-wavy decoration-amber-500",
-        ocrMismatch && "underline decoration-wavy decoration-purple-500 bg-purple-50/40"
+        warningObj && "bg-amber-50/40",
+        ocrMismatch && "bg-purple-50/40"
       )}
-      title={ocrMismatch || warning}
+      title={tooltipText}
     >
-      {value}
+      <div 
+        ref={ref}
+        contentEditable
+        suppressContentEditableWarning
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        className={cn(
+          "inline-block min-w-[20px] outline-none cursor-text focus:bg-blue-50 focus:ring-2 focus:ring-inset focus:ring-blue-300 rounded px-1.5 py-0.5 -mx-1.5 -my-0.5",
+          warningObj && "underline decoration-wavy decoration-amber-500",
+          ocrMismatch && "underline decoration-wavy decoration-purple-500"
+        )}
+      >
+        {value}
+      </div>
+      {suggestion && (
+        <button
+          onClick={() => onChange(String(suggestion))}
+          className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 transition-opacity p-1 bg-white hover:bg-amber-100 text-amber-500 rounded-md shadow-sm border border-amber-200 z-10"
+          title={`一键采纳建议: ${suggestion}`}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+        </button>
+      )}
     </td>
   );
 }
@@ -269,13 +290,12 @@ function rebuildBeforeTable(lines: BeforeLine[]): string {
  *   - 自动验证：箭头与参考区间不一致时显示警告
  *   - 支持单列/双列布局切换
  */
-export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, caseId, ocrRawNumbers }: LabMarkdownViewerProps) {
+export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
+  const { caseId, evidenceId, title, rawText, ocrRawNumbers, valueWarnings, isAbnormal } = props;
   const [dualColumn, setDualColumn] = useState(false);
 
-  // 解析 Markdown 为 header + table
+  // 原始解析逻辑
   const parsed = useMemo(() => parseMarkdownTable(rawText), [rawText]);
-
-  // 可编辑的表格与元数据状态
   const parsedBeforeInitial = useMemo(() => parseBeforeTable(parsed.beforeTable), [parsed.beforeTable]);
   const [beforeLines, setBeforeLines] = useState<BeforeLine[]>(parsedBeforeInitial);
   const [tableRows, setTableRows] = useState<string[][]>(parsed.rows);
@@ -286,13 +306,41 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
     setBeforeLines(parsedBeforeInitial);
   }, [parsed.rows, parsedBeforeInitial]);
 
-  // 验证结果
-  const warnings = useMemo(() => validateLabResults(parsed.headers, tableRows), [parsed.headers, tableRows]);
+  // 维护最新的依赖引用，用于防抖闭包读值
+  const latestParsed = useRef(parsed);
+  useEffect(() => { latestParsed.current = parsed; }, [parsed]);
+  const latestBeforeLines = useRef(beforeLines);
+  useEffect(() => { latestBeforeLines.current = beforeLines; }, [beforeLines]);
+  const latestTableRows = useRef(tableRows);
+  useEffect(() => { latestTableRows.current = tableRows; }, [tableRows]);
 
-  // 动态寻找结果列的索引，以便给该列标底部红线波浪警告
+  // 利用 backend 提供的高精度值警告，若无则回退到前端正则盲猜
+  const warningsMap = useMemo(() => {
+    if (valueWarnings && valueWarnings.length > 0) {
+      const map = new Map<string, any>();
+      valueWarnings.forEach(w => {
+        if (w.details?.row_index !== undefined && w.details?.col_index !== undefined) {
+          map.set(`${w.details.row_index}-${w.details.col_index}`, w);
+        }
+      });
+      return map;
+    }
+    // 降级：仅根据正负向和参考区间盲猜结果列下标并在该列上挂载警告
+    const legacyWarnings = validateLabResults(parsed.headers, tableRows);
+    const map = new Map<string, any>();
+    legacyWarnings.forEach((msg, ri) => {
+      const colIdx = parsed.headers.findIndex(h => /结果|测定值|检测值|数值/i.test(h)) > -1
+        ? parsed.headers.findIndex(h => /结果|测定值|检测值|数值/i.test(h))
+        : 3;
+      map.set(`${ri}-${colIdx}`, { message: msg });
+    });
+    return map;
+  }, [valueWarnings, parsed.headers, tableRows]);
+
+  // 定位结果列，用于给结果列显示双源 mismatch
   const resultColFallback = useMemo(() => {
-    let col = parsed.headers.findIndex(h => /结果|测定值|检测值|数值/i.test(h));
-    return col === -1 ? 3 : col;
+    const idx = parsed.headers.findIndex(h => /结果|测定值|检测值|数值/i.test(h));
+    return idx === -1 ? 3 : idx;
   }, [parsed.headers]);
 
   // [ADR-035] OCR↔LLM 数值交叉验证
@@ -334,6 +382,8 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
     return blocks;
   }, [beforeLines]);
 
+  const fieldSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  
   // 编辑元数据字段
   const handleFieldChange = useCallback((idx: number, newVal: string) => {
     setBeforeLines(prev => {
@@ -343,18 +393,22 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
         updated[idx] = { ...line, value: newVal };
       }
       
-      if (caseId && evidenceId) {
-        const newBeforeStr = rebuildBeforeTable(updated);
-        const newMd = rebuildMarkdown(newBeforeStr, parsed.headers, tableRows, parsed.afterTable);
-        fetch(`/api/cases/${caseId}/evidence/${evidenceId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ai_analysis: newMd }),
-        }).catch(err => console.error("自动保存元数据失败:", err));
-      }
+      if (fieldSaveTimerRef.current) clearTimeout(fieldSaveTimerRef.current);
+      fieldSaveTimerRef.current = setTimeout(() => {
+        if (caseId && evidenceId) {
+          const newMd = rebuildMarkdown(rebuildBeforeTable(updated), latestParsed.current.headers, latestTableRows.current, latestParsed.current.afterTable);
+          fetch(`/api/cases/${caseId}/evidence/${evidenceId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ai_analysis: newMd }),
+          }).catch(err => console.error("自动保存元数据失败:", err));
+        }
+      }, 800);
       return updated;
     });
-  }, [caseId, evidenceId, parsed.headers, tableRows, parsed.afterTable]);
+  }, [caseId, evidenceId]);
+
+  const cellSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // 编辑某个单元格
   const handleCellChange = useCallback((rowIdx: number, colIdx: number, newVal: string) => {
@@ -362,27 +416,21 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
       const updated = prev.map(r => [...r]);
       const row = updated[rowIdx];
       if (row) row[colIdx] = newVal;
+
+      if (cellSaveTimerRef.current) clearTimeout(cellSaveTimerRef.current);
+      cellSaveTimerRef.current = setTimeout(() => {
+        if (caseId && evidenceId) {
+          const newMd = rebuildMarkdown(rebuildBeforeTable(latestBeforeLines.current), latestParsed.current.headers, updated, latestParsed.current.afterTable);
+          fetch(`/api/cases/${caseId}/evidence/${evidenceId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ai_analysis: newMd }),
+          }).catch(err => console.error("自动保存失败:", err));
+        }
+      }, 800);
       return updated;
     });
-
-    // 异步保存到后端
-    if (caseId && evidenceId) {
-      const updatedRows = [...tableRows];
-      const currentRow = updatedRows[rowIdx];
-      if (currentRow) {
-        updatedRows[rowIdx] = [...currentRow];
-        updatedRows[rowIdx]![colIdx] = newVal;
-      }
-      
-      // 重建 Markdown 并保存，注意使用当前最新的 beforeLines
-      const newMd = rebuildMarkdown(rebuildBeforeTable(beforeLines), parsed.headers, updatedRows, parsed.afterTable);
-      fetch(`/api/cases/${caseId}/evidence/${evidenceId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ai_analysis: newMd }),
-      }).catch(err => console.error("自动保存失败:", err));
-    }
-  }, [caseId, evidenceId, tableRows, parsed]);
+  }, [caseId, evidenceId]);
 
   // 渲染表格（支持拆分双列）
   const renderTable = useCallback((rows: string[][], startIdx: number) => (
@@ -401,32 +449,37 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
           const actualIdx = startIdx + ri;
           const rowText = row.join("");
           const rowIsAbnormal = rowText.includes("↑") || rowText.includes("↓");
-          const rowWarning = warnings.get(actualIdx);
           const rowMismatch = mismatches.get(actualIdx);
           
+          // 若这一排任何一列有 Backend Warning，都将这行标记为 warning style
+          const hasRowWarning = row.some((_, ci) => warningsMap.has(`${actualIdx}-${ci}`));
+
           return (
             <tr
               key={actualIdx}
               className={cn(
                 "border-b border-slate-100 transition-colors group",
                 rowIsAbnormal && "bg-red-50 border-l-[3px] border-l-red-500",
-                rowWarning && "bg-amber-50/60 border-l-[3px] border-l-amber-500",
-                rowMismatch && !rowIsAbnormal && !rowWarning && "bg-purple-50/40 border-l-[3px] border-l-purple-400",
-                !rowIsAbnormal && !rowWarning && !rowMismatch && "hover:bg-blue-50/30"
+                hasRowWarning && "bg-amber-50/60 border-l-[3px] border-l-amber-500",
+                rowMismatch && !rowIsAbnormal && !hasRowWarning && "bg-purple-50/40 border-l-[3px] border-l-purple-400",
+                !rowIsAbnormal && !hasRowWarning && !rowMismatch && "hover:bg-blue-50/30"
               )}
             >
               {row.map((cell, ci) => {
                 const cellIsAbnormal = cell.includes("↑") || cell.includes("↓");
-                // [ADR-035] 只在「结果」列显示交叉验证的 mismatch 提示
+                const cellWarning = warningsMap.get(`${actualIdx}-${ci}`);
+                
+                // [ADR-035] 交叉验证 mismatch 提示
                 const cellMismatch = (ci === resultColFallback || ci === 3) && rowMismatch
                   ? `⚠️ OCR原始值: ${rowMismatch.ocrValue}，LLM清洗后: ${rowMismatch.llmValue}`
                   : undefined;
+
                 return (
                   <EditableCell
                     key={ci}
                     value={cell}
                     isAbnormal={cellIsAbnormal}
-                    warning={((ci === resultColFallback) || (ci === 3)) && rowWarning ? rowWarning : undefined}
+                    warningObj={cellWarning}
                     ocrMismatch={cellMismatch}
                     onChange={(newVal) => handleCellChange(actualIdx, ci, newVal)}
                   />
@@ -437,7 +490,7 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
         })}
       </tbody>
     </table>
-  ), [parsed.headers, warnings, mismatches, handleCellChange]);
+  ), [parsed.headers, warningsMap, mismatches, resultColFallback, handleCellChange]);
 
   // 双列拆分
   const midPoint = Math.ceil(tableRows.length / 2);
@@ -460,10 +513,10 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
 
         <div className="flex items-center gap-2">
           {/* 验证警告统计 */}
-          {warnings.size > 0 && (
+          {warningsMap.size > 0 && (
             <span className="flex items-center gap-1 bg-amber-50 text-amber-700 text-xs font-bold px-2.5 py-1 rounded-full border border-amber-200">
               <AlertTriangle className="h-3.5 w-3.5" />
-              {warnings.size} 项待核实
+              {warningsMap.size} 项待核实
             </span>
           )}
 
@@ -520,10 +573,10 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
               } else {
                 const fields = block.data as { originalIndex: number, line: BeforeLine & { type: "field" } }[];
                 return (
-                  <div key={bIdx} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-4 mb-6">
+                  <div key={bIdx} className="flex flex-wrap gap-x-6 gap-y-4 mb-6">
                     {fields.map(f => (
-                      <div key={f.originalIndex} className="flex flex-col space-y-1.5 focus-within:ring-0">
-                        <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider pl-1">
+                      <div key={f.originalIndex} className="flex-1 min-w-[160px] max-w-[280px] flex flex-col space-y-1.5 focus-within:ring-0">
+                        <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider pl-1 whitespace-nowrap overflow-hidden text-ellipsis">
                           {f.line.key}
                         </label>
                         <input
@@ -531,7 +584,7 @@ export function LabMarkdownViewer({ rawText, title, isAbnormal, evidenceId, case
                           value={f.line.value}
                           onChange={(e) => handleFieldChange(f.originalIndex, e.target.value)}
                           className={cn(
-                            "h-10 px-3 text-sm font-medium text-slate-800 bg-slate-50/70",
+                            "h-10 px-3 text-sm font-medium text-slate-800 bg-slate-50/70 w-full",
                             "border border-slate-200 rounded-lg shadow-sm transition-all focus:outline-none",
                             "hover:bg-white hover:border-slate-300 focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                           )}

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-import logging
+from loguru import logger
 import uuid
 from pathlib import Path
 
@@ -10,7 +10,6 @@ from app.gateway.services.analyzer_registry import AnalysisResult
 from app.gateway.services.vision_gateway import enhance_medical_imaging
 from app.core.config.paths import get_paths
 
-logger = logging.getLogger(__name__)
 
 async def _call_mcp_analyze(image_path: str, thread_id: str, original_filename: str) -> dict | None:
     from app.gateway.services.mcp_vision_client import analyze_xray
@@ -53,7 +52,6 @@ async def _call_mcp_analyze(image_path: str, thread_id: str, original_filename: 
         f"findings={total_findings}"
     )
     return result
-
 
 class XrayMCPAnalyzer:
     """Uses Local GPU YOLO + Segment Everything model."""
