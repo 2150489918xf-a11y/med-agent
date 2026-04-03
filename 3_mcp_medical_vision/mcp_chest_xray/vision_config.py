@@ -15,8 +15,8 @@ SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SERVICE_DIR)  # torchxrayvision root
 
 # Model weights — loaded from local models/ folder
-YOLO_WEIGHTS = os.path.join(SERVICE_DIR, "models", "yolov8_vinbigdata_acc867.pt")
-MEDSAM_CHECKPOINT = os.path.join(SERVICE_DIR, "models", "medsam_vit_b.pth")
+YOLO_WEIGHTS = os.path.join(SERVICE_DIR, "models", "best.pt")
+MEDSAM_CHECKPOINT = os.path.join(SERVICE_DIR, "models", "MedSAM2_latest.pt")
 
 # Output directory
 OUTPUT_DIR = os.path.join(SERVICE_DIR, "output")
