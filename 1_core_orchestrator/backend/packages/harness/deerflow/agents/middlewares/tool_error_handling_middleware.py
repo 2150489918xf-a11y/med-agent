@@ -82,9 +82,11 @@ def _build_runtime_middlewares(
     ]
 
     if include_uploads:
+        from deerflow.agents.middlewares.patient_record_middleware import PatientRecordMiddleware
         from deerflow.agents.middlewares.uploads_middleware import UploadsMiddleware
 
         middlewares.insert(1, UploadsMiddleware())
+        middlewares.insert(2, PatientRecordMiddleware())
 
     if include_dangling_tool_call_patch:
         from deerflow.agents.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware

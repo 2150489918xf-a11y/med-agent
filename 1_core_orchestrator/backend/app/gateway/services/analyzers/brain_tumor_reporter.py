@@ -41,7 +41,12 @@ async def generate_brain_report(spatial_info: dict, slice_png_path: str) -> dict
         f"{'（提示脑室受压）' if sr.get('ventricle_compression_ratio', 1.0) < 0.8 else ''}。"
     )
 
-    prompt = f"""【系统设定】
+    prompt = f"""【系统级严重警告】：
+1. 报告中所有数值（体积、距离、位置）只能使用我下面提供的系统强制前置数据，绝对不允许自行计算或估算！
+2. 描述位置时必须引用 AAL 图谱标签，不允许出现“可能位于……”这种模糊词！
+3. 最终输出必须严格遵循我给的 JSON Schema，不得多一个字、不许少一个字段！若违反将导致数据流直接崩溃！
+
+【系统设定】
 你是一名顶尖的神经影像科医生。请根据我提供的[系统强制前置数据]与[病灶最大截面图]，
 撰写一份专业的脑肿瘤 MRI 报告。
 
@@ -55,17 +60,16 @@ async def generate_brain_report(spatial_info: dict, slice_png_path: str) -> dict
 4. 按"部位-大小-形态-信号特征-空间关系-周边情况-影像学印象"格式用Markdown输出
 
 【输出格式要求】
-请严格返回 JSON 格式，包含 cross_check 和 report 两个字段。
-必须输出可解析的 JSON，不要 Markdown 代码块包裹。
+请严格遵守 JSON Schema，不得引入其他外层包裹，不要使用```json 格式标记：
 {{
   "cross_check": {{
-    "loc": "<引用的解剖位置>",
-    "vol_et": <数字>,
-    "vol_ed": <数字>,
-    "crosses_midline": <布尔值>,
-    "brainstem_dist": <数字>
+    "loc": "String (必须与前置数据中的解剖学定位完全一致)",
+    "vol_et": "Number (增强核心体积)",
+    "vol_ed": "Number (周围水肿区体积)",
+    "crosses_midline": "Boolean (是否跨越中线)",
+    "brainstem_dist": "Number (距脑干最近距离)"
   }},
-  "report": "..."
+  "report": "String (Markdown 格式的报告正文)"
 }}"""
 
     content_list = [{"type": "text", "text": prompt}]

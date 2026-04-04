@@ -83,6 +83,7 @@ src/
 │   └── mock/               # Mock/demo pages
 ├── components/             # React components
 │   ├── ui/                 # Reusable UI components
+│   ├── doctor/             # Doctor review panels (EvidenceDesk, imaging, OCR, lab viewers)
 │   ├── workspace/          # Workspace-specific components
 │   ├── landing/            # Landing page components
 │   └── ai-elements/        # AI-related UI elements
@@ -123,6 +124,7 @@ src/
 - Uses pnpm workspaces (see `packageManager` in package.json)
 - Turbopack enabled by default in development for faster builds
 - Environment validation can be skipped with `SKIP_ENV_VALIDATION=1` (useful for Docker)
+- For focused doctor-review refactors, prefer isolated verification such as `pnpm exec eslint "src/components/doctor/**/*.tsx"` alongside `pnpm typecheck`.
 - Backend API URLs are optional; nginx proxy is used by default in development
 
 ## License

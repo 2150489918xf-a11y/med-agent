@@ -133,7 +133,9 @@ def detect_decimal_shift_errors(markdown_text: str) -> tuple[list[ValueWarning],
     result_col_idx = _find_column_index(header_cells, ["结果", "result", "检验结果", "检测结果", "测定值", "检测值"])
     ref_col_idx = _find_column_index(header_cells, ["参考区间", "参考范围", "参考值", "reference", "正常范围", "正常值"])
     name_col_idx = _find_column_index(header_cells, ["检验项目", "项目", "项目名称", "名称", "item", "测试项目"])
+    arrow_col_idx = _find_column_index(header_cells, ["异常", "标记", "flag", "异常标记", "异常提示"])
     type_col_idx = _find_column_index(header_cells, ["数据类型", "类型", "type"])
+    seq_col_idx = _find_column_index(header_cells, ["序号", "编号", "no", "#"])
 
     # 如果无法定位到关键列，放弃检测
     if result_col_idx is None or ref_col_idx is None:
@@ -200,8 +202,14 @@ def detect_decimal_shift_errors(markdown_text: str) -> tuple[list[ValueWarning],
                 result_cell_cleaned = cleaned_suggestion
 
         # 继续用清理后的值进行逻辑校验（防止 "5.O" 弄阻断了 float() 转换）
-        has_up_arrow = "↑" in result_cell_cleaned
-        has_down_arrow = "↓" in result_cell_cleaned
+        # [v4] 优先从独立「异常」列获取箭头，如果没有则回退到结果列内联检测
+        if arrow_col_idx is not None and arrow_col_idx < len(cells):
+            arrow_cell = cells[arrow_col_idx].strip()
+            has_up_arrow = "↑" in arrow_cell
+            has_down_arrow = "↓" in arrow_cell
+        else:
+            has_up_arrow = "↑" in result_cell_cleaned
+            has_down_arrow = "↓" in result_cell_cleaned
         has_arrow = has_up_arrow or has_down_arrow
 
         # 提取纯数值用于移位检测
@@ -316,42 +324,28 @@ def cross_validate_numbers(
 ) -> list[ValueWarning]:
     """对比 PaddleOCR 原始数值指纹和 Qwen 清洗后 Markdown 中的数值。
 
-    核心思路：
-    - ocr_raw_numbers 是 PaddleOCR 直接识别文本中提取的数字列表（视为"相机看到的真相"）
-    - cleaned_markdown 是 Qwen 大模型清洗/重排后的 Markdown 文本
-    - 从 cleaned_markdown 中提取数值，与 ocr_raw_numbers 做集合差异对比
-    - 在 Qwen 输出中出现但 OCR 中不存在的数字 → 可能是 LLM 数值幻觉
-    - 在 OCR 中出现但 Qwen 中消失的数字 → 可能是 LLM 遗漏
-
-    限制：
-    - 数字匹配采用字符串精确比较（"5.55" != "5.5"）
-    - 序号、表头行号等噪声数字无法完全过滤，使用频次分析降噪
+    [v4] 简化为精确匹配：
+    - 用户决策："大模型的幻觉要么就是数字误差很大，要么就是没误差"
+    - 直接做集合差异，不需要模糊匹配
+    - OCR 原始数值视为"相机看到的真相"
     """
     if not ocr_raw_numbers or not cleaned_markdown:
         return []
 
-    # 从清洗后 Markdown 中提取数值
     from app.gateway.services.paddle_ocr import _extract_lab_numbers
     qwen_numbers = _extract_lab_numbers(cleaned_markdown)
 
     if not qwen_numbers:
         return []
 
-    # 构建多重集（允许重复），用于精确频次对比
-    ocr_counts: dict[str, int] = {}
-    for n in ocr_raw_numbers:
-        ocr_counts[n] = ocr_counts.get(n, 0) + 1
-
-    qwen_counts: dict[str, int] = {}
-    for n in qwen_numbers:
-        qwen_counts[n] = qwen_counts.get(n, 0) + 1
+    ocr_set = set(ocr_raw_numbers)
+    qwen_set = set(qwen_numbers)
 
     warnings: list[ValueWarning] = []
 
-    # ── 检测 Qwen 新增的数字（可能是幻觉） ──
-    qwen_only = set(qwen_counts.keys()) - set(ocr_counts.keys())
-    # 过滤掉小整数序号（1-30），这些通常是表格序号列
-    qwen_only_filtered = {n for n in qwen_only if not (_is_likely_serial_number(n))}
+    # Qwen 新增的数字（OCR 中不存在）→ 可能是幻觉
+    qwen_only = qwen_set - ocr_set
+    qwen_only_filtered = {n for n in qwen_only if not _is_likely_serial_number(n)}
 
     if qwen_only_filtered:
         warnings.append(ValueWarning(
@@ -359,7 +353,7 @@ def cross_validate_numbers(
             warning_type="value_mismatch",
             severity="medium",
             message=(
-                f"Qwen 清洗后出现了 {len(qwen_only_filtered)} 个 OCR 原文中不存在的数字，"
+                f"清洗后出现了 {len(qwen_only_filtered)} 个 OCR 原文中不存在的数字，"
                 f"可能为大模型数值幻觉：{', '.join(sorted(qwen_only_filtered))}"
             ),
             details={
@@ -368,49 +362,22 @@ def cross_validate_numbers(
             },
         ))
 
-    # ── 检测 OCR 有但 Qwen 丢失的数字（可能是遗漏） ──
-    ocr_only = set(ocr_counts.keys()) - set(qwen_counts.keys())
-    ocr_only_filtered = {n for n in ocr_only if not (_is_likely_serial_number(n))}
+    # OCR 有但 Qwen 丢失的数字 → 可能是遗漏（仅数量 ≥3 时告警）
+    ocr_only = ocr_set - qwen_set
+    ocr_only_filtered = {n for n in ocr_only if not _is_likely_serial_number(n)}
 
-    if ocr_only_filtered:
-        # 遗漏严重程度较低，可能是 Qwen 正确地去掉了噪声
-        # 但如果遗漏数量较多，还是值得提醒
-        if len(ocr_only_filtered) >= 3:
-            warnings.append(ValueWarning(
-                item_name="(全局对账)",
-                warning_type="value_mismatch",
-                severity="medium",
-                message=(
-                    f"OCR 原文中有 {len(ocr_only_filtered)} 个数字在 Qwen 清洗结果中消失，"
-                    f"请核对是否有遗漏：{', '.join(sorted(ocr_only_filtered))}"
-                ),
-                details={
-                    "source": "qwen_omission",
-                    "ocr_only_values": sorted(ocr_only_filtered),
-                },
-            ))
-
-    # ── 检测同一数字出现频次差异大（复制/吞并错误） ──
-    common_keys = set(ocr_counts.keys()) & set(qwen_counts.keys())
-    freq_mismatches = []
-    for n in common_keys:
-        if _is_likely_serial_number(n):
-            continue
-        diff = abs(ocr_counts[n] - qwen_counts[n])
-        if diff >= 2:
-            freq_mismatches.append(f"{n}(OCR×{ocr_counts[n]} vs Qwen×{qwen_counts[n]})")
-
-    if freq_mismatches:
+    if len(ocr_only_filtered) >= 3:
         warnings.append(ValueWarning(
             item_name="(全局对账)",
             warning_type="value_mismatch",
             severity="medium",
             message=(
-                f"以下数字在两个源中出现频次差异显著：{'; '.join(freq_mismatches)}"
+                f"OCR 原文中有 {len(ocr_only_filtered)} 个数字在清洗结果中消失，"
+                f"请核对是否有遗漏：{', '.join(sorted(ocr_only_filtered))}"
             ),
             details={
-                "source": "frequency_mismatch",
-                "mismatched_values": freq_mismatches,
+                "source": "qwen_omission",
+                "ocr_only_values": sorted(ocr_only_filtered),
             },
         ))
 

@@ -1,11 +1,24 @@
 "use client";
 
+import { FileText, Columns2, AlignJustify, AlertTriangle, SearchCheck, Sparkles, ImageIcon, X } from "lucide-react";
 import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
-import { cn } from "@/lib/utils";
-import { FileText, Columns2, AlignJustify, AlertTriangle, SearchCheck, Sparkles } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Streamdown } from "streamdown";
+
+import { Button } from "@/components/ui/button";
 import { streamdownPlugins } from "@/core/streamdown";
+import { cn } from "@/lib/utils";
+
+interface LabValueWarningDetails {
+  row_index?: number;
+  col_index?: number;
+  suggestion?: string;
+  candidates?: string[];
+}
+
+export interface LabValueWarning {
+  message?: string;
+  details?: LabValueWarningDetails;
+}
 
 interface LabMarkdownViewerProps {
   rawText: string;
@@ -16,7 +29,9 @@ interface LabMarkdownViewerProps {
   /** [ADR-035] OCR 原始数值指纹，用于与 LLM 清洗后数值交叉对账 */
   ocrRawNumbers?: string[];
   /** [ADR-037] 后端精确下发的值异常警告，包含行列索引与清理建议 */
-  valueWarnings?: any[];
+  valueWarnings?: LabValueWarning[];
+  /** [v4] 原始化验单图片的 artifact URL，供医生人工核对 */
+  originalImageUrl?: string;
 }
 
 /** 
@@ -85,8 +100,8 @@ function validateLabResults(headers: string[], rows: string[][]): Map<number, st
     const row = rows[i];
     if (!row || row.length <= refCol) continue;
 
-    const resultCell = row[resultCol] || "";
-    const refCell = row[refCol] || "";
+    const resultCell = row[resultCol] ?? "";
+    const refCell = row[refCol] ?? "";
 
     // 提取箭头方向
     const hasUp = resultCell.includes("↑");
@@ -94,17 +109,17 @@ function validateLabResults(headers: string[], rows: string[][]): Map<number, st
     if (!hasUp && !hasDown) continue;
 
     // 提取数值
-    const numMatch = resultCell.match(/([\d.]+)/);
+    const numMatch = /([\d.]+)/.exec(resultCell);
     if (!numMatch?.[1]) continue;
     const value = parseFloat(numMatch[1]);
     if (isNaN(value)) continue;
 
     // 解析参考区间（支持 "3.5-9.5"、"<1"、">0.1" 格式）
-    const rangeMatch = refCell.match(/([\d.]+)\s*[-~]\s*([\d.]+)/);
-    const ltMatch = refCell.match(/[<＜]\s*([\d.]+)/);
-    const gtMatch = refCell.match(/[>＞]\s*([\d.]+)/);
+    const rangeMatch = /([\d.]+)\s*[-~]\s*([\d.]+)/.exec(refCell);
+    const ltMatch = /[<＜]\s*([\d.]+)/.exec(refCell);
+    const gtMatch = /[>＞]\s*([\d.]+)/.exec(refCell);
 
-    if (rangeMatch && rangeMatch[1] && rangeMatch[2]) {
+    if (rangeMatch?.[1] && rangeMatch?.[2]) {
       const low = parseFloat(rangeMatch[1]);
       const high = parseFloat(rangeMatch[2]);
       
@@ -115,12 +130,12 @@ function validateLabResults(headers: string[], rows: string[][]): Map<number, st
       if (hasUp && value >= low && value <= high) {
         warnings.set(i, `标记为 ↑ 但 ${value} 在参考区间 ${low}-${high} 内，请核实`);
       }
-    } else if (ltMatch && ltMatch[1]) {
+    } else if (ltMatch?.[1]) {
       const threshold = parseFloat(ltMatch[1]);
       if (hasUp && value < threshold) {
         warnings.set(i, `标记为 ↑ 但 ${value} < ${threshold}，请核实`);
       }
-    } else if (gtMatch && gtMatch[1]) {
+    } else if (gtMatch?.[1]) {
       const threshold = parseFloat(gtMatch[1]);
       if (hasDown && value > threshold) {
         warnings.set(i, `标记为 ↓ 但 ${value} > ${threshold}，请核实`);
@@ -141,7 +156,7 @@ function crossValidateNumbers(
   ocrRawNumbers: string[]
 ): Map<number, { ocrValue: string; llmValue: string }> {
   const mismatches = new Map<number, { ocrValue: string; llmValue: string }>();
-  if (!ocrRawNumbers || ocrRawNumbers.length === 0) return mismatches;
+  if (ocrRawNumbers.length === 0) return mismatches;
 
   const ocrSet = new Set(ocrRawNumbers);
 
@@ -149,9 +164,9 @@ function crossValidateNumbers(
     const row = rows[i];
     if (!row || row.length <= resultColIdx) continue;
 
-    const cell = row[resultColIdx] || "";
+    const cell = row[resultColIdx] ?? "";
     // 提取数值（忽略箭头与空格）
-    const numMatch = cell.replace(/[↑↓]/g, "").trim().match(/([\d.]+)/);
+    const numMatch = /([\d.]+)/.exec(cell.replace(/[↑↓]/g, "").trim());
     if (!numMatch?.[1]) continue;
     const llmValue = numMatch[1];
 
@@ -188,7 +203,7 @@ function EditableCell({
 }: { 
   value: string; 
   isAbnormal?: boolean; 
-  warningObj?: any;
+  warningObj?: LabValueWarning;
   ocrMismatch?: string;
   onChange: (newVal: string) => void;
 }) {
@@ -196,7 +211,7 @@ function EditableCell({
 
   const handleBlur = useCallback(() => {
     if (ref.current) {
-      const newText = ref.current.textContent || "";
+      const newText = ref.current.textContent ?? "";
       if (newText !== value) {
         onChange(newText);
       }
@@ -211,8 +226,8 @@ function EditableCell({
     }
   }, []);
 
-  const tooltipText = warningObj?.message || ocrMismatch;
-  const suggestion = warningObj?.details?.suggestion || warningObj?.details?.candidates?.[0];
+  const tooltipText = warningObj?.message ?? ocrMismatch;
+  const suggestion = warningObj?.details?.suggestion ?? warningObj?.details?.candidates?.[0];
 
   return (
     <td
@@ -256,17 +271,22 @@ type BeforeLine =
   | { type: "raw"; text: string }
   | { type: "field"; prefix: string; key: string; sep: string; value: string };
 
+type BeforeFieldLine = Extract<BeforeLine, { type: "field" }>;
+type BeforeBlock =
+  | { type: "markdown"; data: string }
+  | { type: "fields"; data: Array<{ originalIndex: number; line: BeforeFieldLine }> };
+
 function parseBeforeTable(text: string): BeforeLine[] {
   return text.split("\n").map(line => {
-    const m = line.match(/^(\s*[-*]?\s*)([^:：\n]{1,30})([:：])(.*)$/);
+    const m = /^(\s*[-*]?\s*)([^:：\n]{1,30})([:：])(.*)$/.exec(line);
     if (m) {
-      const value = m[4]?.trim() || "";
+      const value = m[4]?.trim() ?? "";
       if (value.length > 0) {
         return {
           type: "field",
-          prefix: m[1] || "",
-          key: m[2]?.trim() || "",
-          sep: m[3] || "",
+          prefix: m[1] ?? "",
+          key: m[2]?.trim() ?? "",
+          sep: m[3] ?? "",
           value: value
         };
       }
@@ -291,8 +311,9 @@ function rebuildBeforeTable(lines: BeforeLine[]): string {
  *   - 支持单列/双列布局切换
  */
 export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
-  const { caseId, evidenceId, title, rawText, ocrRawNumbers, valueWarnings, isAbnormal } = props;
+  const { caseId, evidenceId, title, rawText, ocrRawNumbers, valueWarnings, isAbnormal, originalImageUrl } = props;
   const [dualColumn, setDualColumn] = useState(false);
+  const [showOriginalImage, setShowOriginalImage] = useState(false);
 
   // 原始解析逻辑
   const parsed = useMemo(() => parseMarkdownTable(rawText), [rawText]);
@@ -316,8 +337,8 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
 
   // 利用 backend 提供的高精度值警告，若无则回退到前端正则盲猜
   const warningsMap = useMemo(() => {
-    if (valueWarnings && valueWarnings.length > 0) {
-      const map = new Map<string, any>();
+    if (valueWarnings?.length) {
+      const map = new Map<string, LabValueWarning>();
       valueWarnings.forEach(w => {
         if (w.details?.row_index !== undefined && w.details?.col_index !== undefined) {
           map.set(`${w.details.row_index}-${w.details.col_index}`, w);
@@ -327,7 +348,7 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
     }
     // 降级：仅根据正负向和参考区间盲猜结果列下标并在该列上挂载警告
     const legacyWarnings = validateLabResults(parsed.headers, tableRows);
-    const map = new Map<string, any>();
+    const map = new Map<string, LabValueWarning>();
     legacyWarnings.forEach((msg, ri) => {
       const colIdx = parsed.headers.findIndex(h => /结果|测定值|检测值|数值/i.test(h)) > -1
         ? parsed.headers.findIndex(h => /结果|测定值|检测值|数值/i.test(h))
@@ -345,15 +366,15 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
 
   // [ADR-035] OCR↔LLM 数值交叉验证
   const mismatches = useMemo(() => 
-    crossValidateNumbers(tableRows, resultColFallback, ocrRawNumbers || []),
+    crossValidateNumbers(tableRows, resultColFallback, ocrRawNumbers ?? []),
     [tableRows, resultColFallback, ocrRawNumbers]
   );
 
   // 动态将 beforeLines 分组为 "markdown" 和 "fields" 以供独立渲染
   const beforeBlocks = useMemo(() => {
-    const blocks: { type: "markdown" | "fields", data: any }[] = [];
+    const blocks: BeforeBlock[] = [];
     let curRaw: string[] = [];
-    let curFields: { originalIndex: number, line: BeforeLine & { type: "field" } }[] = [];
+    let curFields: Array<{ originalIndex: number; line: BeforeFieldLine }> = [];
 
     const flushRaw = () => {
       if (curRaw.length > 0) {
@@ -389,7 +410,7 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
     setBeforeLines(prev => {
       const updated = [...prev];
       const line = updated[idx];
-      if (line && line.type === "field") {
+      if (line?.type === "field") {
         updated[idx] = { ...line, value: newVal };
       }
       
@@ -432,13 +453,27 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
     });
   }, [caseId, evidenceId]);
 
+  // [v4] 检测独立「异常」列索引（含 ↑/↓ 标记的专属列）
+  const arrowColIdx = useMemo(() => {
+    return parsed.headers.findIndex(h => /异常|标记|flag/i.test(h));
+  }, [parsed.headers]);
+
+  // [v5] 检测「序号」列索引
+  const seqColIdx = useMemo(() => {
+    return parsed.headers.findIndex(h => /^序号$|^编号$|^no\.?$|^#$/i.test(h.trim()));
+  }, [parsed.headers]);
+
   // 渲染表格（支持拆分双列）
   const renderTable = useCallback((rows: string[][], startIdx: number) => (
     <table className="w-full text-sm border-collapse">
       <thead>
         <tr className="bg-slate-100 border-b-2 border-slate-200">
           {parsed.headers.map((h, i) => (
-            <th key={i} className="px-4 py-3 text-left font-bold text-slate-600 text-xs uppercase tracking-wider whitespace-nowrap border-b border-slate-200">
+            <th key={i} className={cn(
+              "px-4 py-3 text-left font-bold text-xs uppercase tracking-wider whitespace-nowrap border-b border-slate-200",
+              i === arrowColIdx ? "text-red-600 w-12 text-center" : "text-slate-600",
+              i === seqColIdx && "w-14 text-center text-slate-400"
+            )}>
               {h}
             </th>
           ))}
@@ -447,11 +482,13 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
       <tbody>
         {rows.map((row, ri) => {
           const actualIdx = startIdx + ri;
-          const rowText = row.join("");
-          const rowIsAbnormal = rowText.includes("↑") || rowText.includes("↓");
+          // [v4] 异常行判定：独立异常列有箭头 OR 回退到整行文本包含箭头
+          const arrowCell = arrowColIdx >= 0 ? (row[arrowColIdx] ?? "") : "";
+          const rowHasArrow = arrowCell.includes("↑") || arrowCell.includes("↓");
+          const rowTextFallback = row.join("");
+          const rowIsAbnormal = rowHasArrow || rowTextFallback.includes("↑") || rowTextFallback.includes("↓");
           const rowMismatch = mismatches.get(actualIdx);
           
-          // 若这一排任何一列有 Backend Warning，都将这行标记为 warning style
           const hasRowWarning = row.some((_, ci) => warningsMap.has(`${actualIdx}-${ci}`));
 
           return (
@@ -466,13 +503,46 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
               )}
             >
               {row.map((cell, ci) => {
-                const cellIsAbnormal = cell.includes("↑") || cell.includes("↓");
+                // [v5] 序号列：不可编辑，灰色居中
+                const isSeqCol = ci === seqColIdx;
+                if (isSeqCol) {
+                  return (
+                    <td
+                      key={ci}
+                      className="px-2 py-2.5 text-center align-middle text-xs text-slate-400 font-mono select-none"
+                    >
+                      {cell}
+                    </td>
+                  );
+                }
+
+                // [v4] 独立异常列：始终红色粗体居中
+                const isArrowCol = ci === arrowColIdx;
+                const cellIsAbnormal = isArrowCol
+                  ? cell.includes("↑") || cell.includes("↓")
+                  : cell.includes("↑") || cell.includes("↓");
                 const cellWarning = warningsMap.get(`${actualIdx}-${ci}`);
                 
-                // [ADR-035] 交叉验证 mismatch 提示
                 const cellMismatch = (ci === resultColFallback || ci === 3) && rowMismatch
                   ? `⚠️ OCR原始值: ${rowMismatch.ocrValue}，LLM清洗后: ${rowMismatch.llmValue}`
                   : undefined;
+
+                if (isArrowCol) {
+                  // 箭头列：不可编辑，固定样式
+                  return (
+                    <td
+                      key={ci}
+                      className="px-2 py-2.5 text-center align-middle font-bold text-lg select-none"
+                    >
+                      <span className={cn(
+                        cell.includes("↑") && "text-red-600",
+                        cell.includes("↓") && "text-blue-600",
+                      )}>
+                        {cell}
+                      </span>
+                    </td>
+                  );
+                }
 
                 return (
                   <EditableCell
@@ -490,7 +560,7 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
         })}
       </tbody>
     </table>
-  ), [parsed.headers, warningsMap, mismatches, resultColFallback, handleCellChange]);
+  ), [parsed.headers, arrowColIdx, seqColIdx, warningsMap, mismatches, resultColFallback, handleCellChange]);
 
   // 双列拆分
   const midPoint = Math.ceil(tableRows.length / 2);
@@ -506,7 +576,7 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
             <FileText className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-slate-800 tracking-tight">{title || "识别报告"}</h3>
+            <h3 className="text-lg font-bold text-slate-800 tracking-tight">{title ?? "识别报告"}</h3>
             <p className="text-xs text-slate-500 font-medium tracking-wide">点击单元格可直接编辑 · 异常值自动高亮</p>
           </div>
         </div>
@@ -526,6 +596,23 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
               <SearchCheck className="h-3.5 w-3.5" />
               {mismatches.size} 项数值待核对
             </span>
+          )}
+
+          {/* [v4] 原图对照按钮 */}
+          {originalImageUrl && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowOriginalImage(prev => !prev)}
+              className={cn(
+                "h-8 px-2",
+                showOriginalImage ? "text-indigo-700 bg-indigo-50" : "text-slate-500 hover:text-slate-700"
+              )}
+              title={showOriginalImage ? "收起原图" : "查看原图对照"}
+            >
+              <ImageIcon className="h-4 w-4" />
+              <span className="ml-1 text-xs">{showOriginalImage ? "收起原图" : "原图"}</span>
+            </Button>
           )}
 
           {/* 布局切换 */}
@@ -550,7 +637,31 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-auto p-6">
+      <div className={cn("flex-1 overflow-hidden flex", showOriginalImage ? "flex-row" : "flex-col")}>
+        {/* [v4] 原图对照面板 */}
+        {showOriginalImage && originalImageUrl && (
+          <div className="w-1/2 border-r border-slate-200 flex flex-col bg-slate-50">
+            <div className="px-4 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between shrink-0">
+              <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">原始化验单</span>
+              <button
+                onClick={() => setShowOriginalImage(false)}
+                className="p-1 hover:bg-slate-200 rounded transition-colors"
+              >
+                <X className="h-3.5 w-3.5 text-slate-500" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4 flex items-start justify-center">
+              <img
+                src={originalImageUrl}
+                alt="原始化验单"
+                className="max-w-full h-auto rounded-lg shadow-sm border border-slate-200"
+                draggable={false}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className={cn("overflow-auto p-6", showOriginalImage ? "w-1/2" : "flex-1")}>
         {beforeBlocks.length > 0 && (
           <div className={cn(
             "mx-auto bg-white p-8 rounded-t-2xl border border-b-0 border-slate-200 shadow-sm",
@@ -558,7 +669,7 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
           )}>
             {beforeBlocks.map((block, bIdx) => {
               if (block.type === "markdown") {
-                const mdText = block.data as string;
+                const mdText = block.data;
                 if (!mdText.trim()) return null;
                 return (
                   <div key={bIdx} className={cn(
@@ -571,7 +682,7 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
                   </div>
                 );
               } else {
-                const fields = block.data as { originalIndex: number, line: BeforeLine & { type: "field" } }[];
+                const fields = block.data;
                 return (
                   <div key={bIdx} className="flex flex-wrap gap-x-6 gap-y-4 mb-6">
                     {fields.map(f => (
@@ -628,6 +739,7 @@ export function LabMarkdownViewer(props: LabMarkdownViewerProps) {
             </Streamdown>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

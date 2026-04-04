@@ -304,6 +304,7 @@ export function useThreadStream({
                   size: info.size,
                   path: info.artifact_url,
                   status: "uploaded" as const,
+                  ai_analysis_text: info.ai_analysis_text,
                 }),
               );
               setOptimisticMessages((messages) => {
@@ -341,6 +342,7 @@ export function useThreadStream({
             size: info.size,
             path: info.virtual_path,
             status: "uploaded" as const,
+            ai_analysis_text: info.ai_analysis_text,
           }),
         );
 

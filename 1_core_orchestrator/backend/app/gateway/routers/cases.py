@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from deerflow.patient_record_context import build_patient_record_snapshot
+
 from app.gateway.models.case import (
     AddEvidenceRequest,
     CaseStatus,
@@ -38,6 +40,21 @@ router = APIRouter(prefix="/api", tags=["cases"])
 # Simple in-process pub/sub for SSE. Sufficient for single-server MVP.
 
 _sse_subscribers: list[asyncio.Queue] = []
+
+
+def _build_summary_readiness(case) -> dict:
+    snapshot = build_patient_record_snapshot(case.patient_thread_id)
+    guidance = snapshot.get("guidance") or {}
+    return {
+        "ready_for_synthesis": bool(guidance.get("ready_for_ai_summary")),
+        "stage": guidance.get("stage") or "collecting_info",
+        "status_text": guidance.get("status_text") or "病例信息尚未准备完成。",
+        "next_action": guidance.get("next_action") or "请先补充信息或等待资料解析完成。",
+        "blocking_reasons": guidance.get("blocking_reasons") or [],
+        "missing_required_fields": guidance.get("missing_required_fields") or [],
+        "pending_files": guidance.get("pending_files") or [],
+        "failed_files": guidance.get("failed_files") or [],
+    }
 
 def _broadcast_event(event_type: str, data: dict):
     """Push an event to all connected SSE subscribers."""
@@ -145,6 +162,15 @@ async def update_case_status(case_id: str, req: UpdateStatusRequest):
     })
     return case.model_dump()
 
+@router.delete("/cases/{case_id}")
+async def delete_case(case_id: str):
+    """Delete a case by case_id."""
+    deleted = case_db.delete_case(case_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+    _broadcast_event("case_deleted", {"case_id": case_id})
+    return {"status": "ok", "message": "Case deleted successfully"}
+
 # ── Diagnosis Submission ──────────────────────────────────
 
 @router.put("/cases/{case_id}/diagnosis")
@@ -226,20 +252,6 @@ async def delete_evidence(case_id: str, evidence_id: str):
     _broadcast_event("evidence_deleted", {"case_id": case_id, "evidence_id": evidence_id})
     return {"status": "ok", "message": "Evidence deleted successfully", "case": case.model_dump()}
 
-# ── Diagnosis ──────────────────────────────────────────────
-
-@router.put("/cases/{case_id}/diagnosis")
-async def submit_diagnosis(case_id: str, req: SubmitDiagnosisRequest):
-    """Submit doctor's diagnosis. Transitions case to 'diagnosed' status."""
-    case = case_db.submit_diagnosis(case_id, req)
-    if case is None:
-        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
-    _broadcast_event("diagnosed", {
-        "case_id": case_id,
-        "primary_diagnosis": req.primary_diagnosis,
-    })
-    return case.model_dump()
-
 # ── Statistics ──────────────────────────────────────────────
 
 @router.get("/doctor/stats")
@@ -248,6 +260,18 @@ async def get_doctor_stats():
     return case_db.get_stats()
 
 # ── Case Summary for AI Synthesis (Gap④) ──────────────────
+
+@router.get("/cases/{case_id}/summary-readiness")
+async def get_case_summary_readiness(case_id: str):
+    case = case_db.get_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+    readiness = _build_summary_readiness(case)
+    return {
+        "case_id": case_id,
+        **readiness,
+    }
 
 @router.get("/cases/{case_id}/summary")
 async def get_case_summary(case_id: str):
@@ -259,6 +283,16 @@ async def get_case_summary(case_id: str):
     case = case_db.get_case(case_id)
     if case is None:
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+    readiness = _build_summary_readiness(case)
+    if not readiness["ready_for_synthesis"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": readiness["status_text"],
+                **readiness,
+            },
+        )
 
     p = case.patient_info
     sections = []
@@ -327,6 +361,7 @@ async def get_case_summary(case_id: str):
         "summary": summary_text,
         "evidence_count": len(case.evidence),
         "has_diagnosis": case.diagnosis is not None,
+        "summary_readiness": readiness,
     }
 
 # ── Patient-Side Case Lookup ───────────────────────────────

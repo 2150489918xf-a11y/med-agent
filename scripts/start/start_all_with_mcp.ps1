@@ -2,7 +2,13 @@
 # Script to start Gateway API and MCP Vision service together
 
 $ScriptDir = Split-Path -Parent -Path $MyInvocation.MyCommand.Definition
-$BaseDir = $ScriptDir  # Script is at repo root, no need to go up
+$BaseDir = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+$BackendPython = Join-Path $BaseDir "1_core_orchestrator\backend\.venv\Scripts\python.exe"
+$RagflowPython = Join-Path $BaseDir "2_mcp_ragflow_lite\.venv\Scripts\python.exe"
+$McpPython = Join-Path $BaseDir "3_mcp_medical_vision\mcp_chest_xray\.venv\Scripts\python.exe"
+if (-not (Test-Path $McpPython)) {
+    $McpPython = $BackendPython
+}
 
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host " Starting MedAgent Services (v4) " -ForegroundColor Cyan
@@ -11,7 +17,7 @@ Write-Host "=========================================" -ForegroundColor Cyan
 # 1. Start MCP Vision Service
 $McpDir = Join-Path $BaseDir "3_mcp_medical_vision\mcp_chest_xray"
 Write-Host "Starting MCP Vision Service on :8002..." -ForegroundColor Green
-$McpProcess = Start-Process -PassThru -WindowStyle Minimized -FilePath "python" `
+$McpProcess = Start-Process -PassThru -WindowStyle Minimized -FilePath $McpPython `
     -ArgumentList "server.py" `
     -WorkingDirectory $McpDir
 
@@ -39,11 +45,9 @@ if (-not $Ready) {
 
 # 3. Start RAGFlow Lite Service
 $RagflowDir = Join-Path $BaseDir "2_mcp_ragflow_lite"
+$RagflowPythonToUse = if (Test-Path $RagflowPython) { $RagflowPython } else { "python" }
 Write-Host "Starting RAGFlow Lite Service on :9380..." -ForegroundColor Green
-# Using the venv from the backend if a local one is missing, but usually this project expects its own.
-# Since python is in PATH, we try to use the system python to start it if a venv is not strictly strictly required by start script,
-# but to be safe we'll use the same command structure as the gateway.
-$RagflowProcess = Start-Process -PassThru -WindowStyle Minimized -FilePath "python" `
+$RagflowProcess = Start-Process -PassThru -WindowStyle Minimized -FilePath $RagflowPythonToUse `
     -ArgumentList "-m", "api.app" `
     -WorkingDirectory $RagflowDir
 

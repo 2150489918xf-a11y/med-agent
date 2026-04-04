@@ -12,6 +12,7 @@
 """
 
 import asyncio
+import os
 import cv2
 from loguru import logger
 import numpy as np
@@ -46,6 +47,9 @@ def _imwrite_unicode(path: str, img: np.ndarray) -> bool:
 @lru_cache(maxsize=1)
 def _load_classifier():
     """加载 Chinese-CLIP 模型（启动时预热，运行时直接命中缓存）"""
+    # 注入国内镜像加速与防断连策略
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     from transformers import pipeline
 
     return pipeline(

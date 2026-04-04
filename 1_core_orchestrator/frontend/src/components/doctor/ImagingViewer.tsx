@@ -1,32 +1,33 @@
 "use client";
 
-import React, { useState, useRef, useCallback, useEffect } from "react";
-import { cn } from "@/lib/utils";
 import {
-  ZoomIn,
-  ZoomOut,
-  Move,
-  Pen,
+  Bot,
+  Check,
+  Contrast,
+  Download,
   Eraser,
-  RotateCcw,
   Eye,
   EyeOff,
-  Plus,
-  Sun,
-  Contrast,
+  Move,
+  Pen,
   Pencil,
-  Trash2,
-  Bot,
-  UserCheck,
-  Save,
-  Download,
-  Check,
-  X,
-  Undo2,
+  Plus,
   Redo2,
+  RotateCcw,
+  Save,
+  Sun,
+  Trash2,
+  Undo2,
+  UserCheck,
+  X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
+import React, { useState, useRef, useCallback, useEffect } from "react";
+
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 // ── MCP-compatible Finding JSON Schema ─────────────────────
 // This matches the JSON structure returned by the MCP analyze_xray tool.
@@ -57,9 +58,48 @@ export interface McpAnalysisResult {
   findings: Finding[];
   model_version?: string;
   analyzed_at?: string;
-  ai_result?: any;
-  doctor_result?: any;
+  ai_result?: Partial<McpAnalysisResult>;
+  doctor_result?: Partial<McpAnalysisResult>;
   status?: string;
+}
+
+type ImagingStructuredData = Partial<McpAnalysisResult>;
+
+interface ImagingReport {
+  report_id: string;
+  image_path?: string | null;
+  ai_result?: ImagingStructuredData | null;
+  doctor_result?: ImagingStructuredData | null;
+}
+
+interface ImagingReportListResponse {
+  reports?: ImagingReport[];
+}
+
+interface AnalyzeCVResponse {
+  report_id: string;
+  data: McpAnalysisResult;
+  detail?: string;
+}
+
+function toViewerData(
+  data?: ImagingStructuredData | null,
+  fallbackImagePath?: string,
+): McpAnalysisResult | null {
+  if (!data && !fallbackImagePath) {
+    return null;
+  }
+
+  const findings = data?.findings ?? [];
+  return {
+    image_path: data?.image_path ?? fallbackImagePath ?? "",
+    findings,
+    model_version: data?.model_version,
+    analyzed_at: data?.analyzed_at,
+    ai_result: data?.ai_result,
+    doctor_result: data?.doctor_result,
+    status: data?.status ?? (findings.length > 0 ? "completed" : undefined),
+  };
 }
 
 // ── Color System ───────────────────────────────────────────
@@ -86,7 +126,7 @@ const colorMap: Record<string, {
 function pickColor(existing: Finding[], source: "ai" | "human"): string {
   const pool = source === "ai" ? AI_COLORS : HUMAN_COLORS;
   const used = new Set(existing.map(f => f.color));
-  return pool.find(c => !used.has(c)) || pool[existing.length % pool.length]!;
+  return pool.find(c => !used.has(c)) ?? pool[existing.length % pool.length]!;
 }
 
 // ── Source Badge Component ─────────────────────────────────
@@ -138,44 +178,56 @@ export function ImagingViewer({
   mcpResult?: McpAnalysisResult,
   reportId?: string,
   imagePath?: string,
-  initialStructuredData?: any
+  initialStructuredData?: ImagingStructuredData
 }) {
+  const initialViewerData = mcpResult ?? toViewerData(initialStructuredData, propImagePath);
   const [data, setData] = useState<McpAnalysisResult | null>(
-    mcpResult || (propImagePath ? { image_path: propImagePath, findings: initialStructuredData?.findings || [] } : null)
+    initialViewerData
   );
-  const [reportId, setReportId] = useState<string | null>(propReportId || null);
-  const [isLoading, setIsLoading] = useState(!mcpResult && !initialStructuredData && !!threadId);
+  const [reportId, setReportId] = useState<string | null>(propReportId ?? null);
+  const [, setIsLoading] = useState(!mcpResult && !initialStructuredData && Boolean(threadId));
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // State
-  const [findings, setFindings] = useState<Finding[]>(data?.findings || []);
+  const [findings, setFindings] = useState<Finding[]>(initialViewerData?.findings ?? []);
+  const [imageNaturalSize, setImageNaturalSize] = useState<{w: number, h: number} | null>(null);
+  const [renderedSize, setRenderedSize] = useState<{width: number, height: number}>({ width: 0, height: 0 });
 
   useEffect(() => {
     // If we have data directly from props, don't fetch from DB.
     if (initialStructuredData || mcpResult || !threadId) return;
 
     setIsLoading(true);
-    import("@/core/config").then(({ getBackendBaseURL }) => {
-      fetch(`${getBackendBaseURL()}/api/threads/${threadId}/imaging-reports`)
-        .then(r => r.json())
-        .then(d => {
-          if (d.reports && d.reports.length > 0) {
-            // Find the exact report if passed, else just first one
-            const report = (propReportId) ? d.reports.find((r: any) => r.report_id === propReportId) || d.reports[0] : d.reports[0];
-            setReportId(report.report_id);
-            const analyzedResult = report.doctor_result || report.ai_result || {};
-            const parsedData = {
-              image_path: report.image_path || analyzedResult.image_path,
-              findings: analyzedResult.findings || [],
-              model_version: analyzedResult.model_version,
-              analyzed_at: analyzedResult.analyzed_at,
-            };
-            setData(parsedData);
-            setFindings(parsedData.findings || []);
-          }
-        })
-        .finally(() => setIsLoading(false));
-    });
+    void (async () => {
+      try {
+        const { getBackendBaseURL } = await import("@/core/config");
+        const response = await fetch(`${getBackendBaseURL()}/api/threads/${threadId}/imaging-reports`);
+        const payload = (await response.json()) as ImagingReportListResponse;
+        const report = propReportId
+          ? payload.reports?.find((currentReport) => currentReport.report_id === propReportId) ?? payload.reports?.[0]
+          : payload.reports?.[0];
+
+        if (!report) {
+          return;
+        }
+
+        setReportId(report.report_id);
+        const analyzedResult: ImagingStructuredData = report.doctor_result ?? report.ai_result ?? {};
+        const parsedData = toViewerData(
+          { ...analyzedResult, image_path: report.image_path ?? analyzedResult.image_path },
+          report.image_path ?? analyzedResult.image_path,
+        );
+
+        if (!parsedData) {
+          return;
+        }
+
+        setData(parsedData);
+        setFindings(parsedData.findings ?? []);
+      } finally {
+        setIsLoading(false);
+      }
+    })();
   }, [threadId, mcpResult, initialStructuredData, propReportId]);
 
   const [activeTool, setActiveTool] = useState<ToolMode>("pan");
@@ -218,7 +270,7 @@ export function ImagingViewer({
   const redoStackRef = useRef<HistorySnapshot[]>([]);
   const MAX_HISTORY = 50;
   // Force re-render when stacks change (refs don't trigger re-render)
-  const [historyVersion, setHistoryVersion] = useState(0);
+  const [, setHistoryVersion] = useState(0);
 
   // Keep latest state in refs so undo/redo always see fresh values
   const findingsRef = useRef(findings);
@@ -293,6 +345,33 @@ export function ImagingViewer({
   const isPanning = useRef(false);
   const panStart = useRef({ x: 0, y: 0 });
 
+  // ── Object-Fit Contain Size Calculator ───────────────────
+  useEffect(() => {
+    if (!viewerRef.current || !imageNaturalSize) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      
+      const { width: vw, height: vh } = entry.contentRect;
+      const { w: iw, h: ih } = imageNaturalSize;
+      if (vw === 0 || vh === 0 || iw === 0 || ih === 0) return;
+
+      const viewerRatio = vw / vh;
+      const imgRatio = iw / ih;
+
+      if (viewerRatio > imgRatio) {
+        // Viewer is wider than image aspect ratio -> image height is bounded by viewer height
+        setRenderedSize({ width: vh * imgRatio, height: vh });
+      } else {
+        // Viewer is taller than image aspect ratio -> image width is bounded by viewer width
+        setRenderedSize({ width: vw, height: vw / imgRatio });
+      }
+    });
+
+    observer.observe(viewerRef.current);
+    return () => observer.disconnect();
+  }, [imageNaturalSize]);
+
   // ── Coordinate helpers ───────────────────────────────────
   /** Convert mouse event to percentage coordinates relative to the image layer,
    *  accounting for current zoom and pan so annotations align with the image. */
@@ -339,7 +418,7 @@ export function ImagingViewer({
     };
     el.addEventListener('wheel', handler, { passive: false });
     return () => el.removeEventListener('wheel', handler);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleReset = useCallback(() => {
     setZoom(100);
@@ -598,11 +677,6 @@ export function ImagingViewer({
   };
 
   /** Wrapper that pushes history before update (for discrete edits, not continuous drag) */
-  const updateFindingWithHistory = (id: string, patch: Partial<Finding>) => {
-    pushHistory();
-    updateFinding(id, patch);
-  };
-
   const deleteFinding = (id: string) => {
     pushHistory();
     setFindings(prev => prev.filter(f => f.id !== id));
@@ -619,7 +693,7 @@ export function ImagingViewer({
 
   // ── Export JSON ──────────────────────────────────────────
   const exportJson = (): McpAnalysisResult => ({
-    image_path: data?.image_path || "",
+    image_path: data?.image_path ?? "",
     model_version: data?.model_version,
     analyzed_at: data?.analyzed_at,
     findings,
@@ -659,29 +733,22 @@ export function ImagingViewer({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enable_sam: false, image_url: data?.image_path })
       });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.detail || "Analysis failed");
+      const result = (await res.json()) as AnalyzeCVResponse;
+      if (!res.ok) throw new Error(result.detail ?? "Analysis failed");
       
       setReportId(result.report_id);
       setData(result.data);
-      setFindings(result.data.ai_result?.findings || []);
+      setFindings(result.data.ai_result?.findings ?? []);
       setHasUnsavedChanges(true); // AI just generated it, technically it's a new draft
-    } catch (e: any) {
-      alert(`AI 智能阅片失败: ${e.message}`);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Analysis failed";
+      alert(`AI 智能阅片失败: ${message}`);
     } finally {
       setIsAnalyzing(false);
     }
-  }, [threadId]);
+  }, [threadId, data?.image_path]);
 
-  // 自动触发 AI 分析（有影像但无 AI 结果时，自动调用一次）
-  const autoAnalyzedRef = useRef(false);
-  useEffect(() => {
-    const hasBeenAnalyzed = data?.ai_result || data?.status === 'completed' || data?.status === 'pending_review' || data?.status === 'reviewed';
-    if (data?.image_path && !hasBeenAnalyzed && !isAnalyzing && !autoAnalyzedRef.current && !isLoading) {
-      autoAnalyzedRef.current = true;
-      handleAnalyzeCV();
-    }
-  }, [data?.image_path, data?.ai_result, data?.status, isAnalyzing, isLoading, handleAnalyzeCV]);
+  // 自动触发逻辑已移除，医生通过点击“一键AI诊断”按钮手动触发
 
   const handleDownload = () => {
     const json = exportJson();
@@ -730,7 +797,7 @@ export function ImagingViewer({
         <div>
           <h2 className="text-xl font-semibold tracking-tight text-slate-800">Chest X-Ray Analysis</h2>
           <p className="text-[11px] text-slate-400 mt-0.5 font-mono">
-            Model: {data?.model_version || "N/A"} · {data?.image_path || "N/A"}
+            Model: {data?.model_version ?? "N/A"} · {data?.image_path ?? "N/A"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -823,35 +890,39 @@ export function ImagingViewer({
               </div>
             </div>
           )}
-          {/* ═══ Transform Layer: image + annotations move together ═══ */}
-          <div
-            ref={imageLayerRef}
-            className="relative w-full h-full transition-transform duration-150"
-            style={{
-              transform: `scale(${zoom / 100}) translate(${panOffset.x / (zoom / 100)}px, ${panOffset.y / (zoom / 100)}px)`,
-              transformOrigin: "center center",
-            }}
-          >
-            {/* X-Ray Image */}
-            {data?.image_path ? (
-              <img
-                src={data.image_path}
-                alt="Medical Image"
-                className="w-full h-full object-contain select-none pointer-events-none"
-                draggable={false}
-                style={{
-                  filter: `brightness(${brightness / 100}) contrast(${contrast / 100})`,
-                }}
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-white/40 text-sm">
-                暂无影像
-              </div>
-            )}
+          {/* ═══ Transform Layer Wrapper (centers the layer to prevent coordinate drifting) ═══ */}
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden">
+            <div
+              ref={imageLayerRef}
+              className="relative transition-transform duration-150 pointer-events-auto shadow-2xl bg-black"
+              style={{
+                transform: `scale(${zoom / 100}) translate(${panOffset.x / (zoom / 100)}px, ${panOffset.y / (zoom / 100)}px)`,
+                transformOrigin: "center center",
+                width: imageNaturalSize ? `${renderedSize.width}px` : "100%",
+                height: imageNaturalSize ? `${renderedSize.height}px` : "100%"
+              }}
+            >
+              {/* X-Ray Image */}
+              {data?.image_path ? (
+                <img
+                  src={data.image_path}
+                  alt="Medical Image"
+                  className="absolute inset-0 w-full h-full object-fill select-none pointer-events-none"
+                  draggable={false}
+                  onLoad={(e) => setImageNaturalSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+                  style={{
+                    filter: `brightness(${brightness / 100}) contrast(${contrast / 100})`,
+                  }}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-white/40 text-sm">
+                  暂无影像
+                </div>
+              )}
 
             {/* Annotation overlays — same layer as image, moves with zoom/pan */}
             {showAnnotations && findings.map(f => {
-              const colors = colorMap[f.color] || colorMap.red!;
+              const colors = colorMap[f.color] ?? colorMap.red!;
               const isSelected = selectedId === f.id;
               return (
                 <div
@@ -936,7 +1007,6 @@ export function ImagingViewer({
               );
             })}
 
-            {/* ── Sketch SVG overlay (freehand lines) ── */}
             {(sketches.length > 0 || currentSketch) && (
               <svg
                 className={cn(
@@ -1003,6 +1073,7 @@ export function ImagingViewer({
             )}
           </div>
           {/* ═══ End Transform Layer ═══ */}
+          </div>
 
           {/* Pending finding: name input dialog — OUTSIDE transform layer, pinned to viewport */}
           {pendingFinding && (
@@ -1065,24 +1136,21 @@ export function ImagingViewer({
             <button onClick={handleReset} className="p-2 rounded-lg text-white/60 hover:bg-white/10 hover:text-white transition-all" title="重置视图">
               <RotateCcw className="h-4 w-4" />
             </button>
-            {/* Clear all canvas (sketches + findings) */}
+            {/* Clear sketches only */}
             <button
               onClick={() => {
-                if (findings.length === 0 && sketches.length === 0) return;
+                if (sketches.length === 0) return;
                 pushHistory();
-                setFindings(data?.findings || []); // reset to original AI findings
                 setSketches([]);
-                setSelectedId(null);
-                setEditingId(null);
                 setHasUnsavedChanges(true);
               }}
               className={cn(
                 "p-2 rounded-lg transition-all",
-                (findings.length > (data?.findings?.length || 0) || sketches.length > 0)
+                sketches.length > 0
                   ? "text-red-400 hover:bg-red-500/20 hover:text-red-300"
                   : "text-white/60 hover:bg-white/10 hover:text-white"
               )}
-              title="一键清除画布 (恢复原始AI标注)"
+              title="清除画笔痕迹"
             >
               <Trash2 className="h-4 w-4" />
             </button>
@@ -1183,7 +1251,7 @@ export function ImagingViewer({
           ) : (
             <div className="flex gap-3 overflow-x-auto pb-1">
               {findings.map(f => {
-                const colors = colorMap[f.color] || colorMap.red!;
+                const colors = colorMap[f.color] ?? colorMap.red!;
                 const isEditing = editingId === f.id;
                 const isSelected = selectedId === f.id;
 
@@ -1304,7 +1372,7 @@ export function ImagingViewer({
 
                     {/* Bbox coordinates (read-only display) */}
                     <div className="text-[10px] text-slate-400 font-mono mb-1">
-                      bbox: [{f.bbox.x.toFixed(1)}, {f.bbox.y.toFixed(1)}, {f.bbox.width.toFixed(1)}, {f.bbox.height.toFixed(1)}]
+                      bbox: [{f.bbox?.x?.toFixed(1) ?? 'N/A'}, {f.bbox?.y?.toFixed(1) ?? 'N/A'}, {f.bbox?.width?.toFixed(1) ?? 'N/A'}, {f.bbox?.height?.toFixed(1) ?? 'N/A'}]
                     </div>
 
                     {/* Note */}

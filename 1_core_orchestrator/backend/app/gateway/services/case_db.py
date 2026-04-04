@@ -98,11 +98,18 @@ def _get_conn() -> sqlite3.Connection:
 def create_case(req: CreateCaseRequest) -> Case:
     """Create a new case from a patient intake."""
     case = Case(
-        patient_thread_id=req.patient_thread_id,
+        patient_thread_id=req.patient_thread_id or "",  # placeholder, overwritten below
         priority=req.priority,
         patient_info=req.patient_info,
         evidence=req.evidence,
     )
+    # [ADR-037] ID 统一策略：
+    # 1. 患者端挂号：传入 case_id = thread_id，两端使用同一个 ID
+    # 2. 医生端手动建档：不传 case_id 也不传 thread_id，强制 thread_id = case_id
+    if req.case_id:
+        case.case_id = req.case_id
+    if not req.patient_thread_id:
+        case.patient_thread_id = case.case_id
     with _lock:
         conn = _get_conn()
         conn.execute(
@@ -130,6 +137,15 @@ def get_case(case_id: str) -> Case | None:
     if row is None:
         return None
     return Case.model_validate_json(row[0])
+
+def delete_case(case_id: str) -> bool:
+    """Delete case by case_id."""
+    with _lock:
+        conn = _get_conn()
+        cursor = conn.execute("DELETE FROM cases WHERE case_id = ?", (case_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        return deleted
 
 def list_cases(
     status: CaseStatus | None = None,

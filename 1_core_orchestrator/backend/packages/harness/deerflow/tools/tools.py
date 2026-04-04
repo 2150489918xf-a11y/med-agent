@@ -15,6 +15,7 @@ from app.core.tools.builtins.rag_retrieve import rag_retrieve_tool
 from app.core.tools.builtins.update_patient_info import update_patient_info_tool
 from app.core.tools.builtins.preview_appointment import preview_appointment_tool
 from app.core.tools.builtins.schedule_appointment import schedule_appointment_tool
+from app.core.tools.builtins.show_medical_record import show_medical_record_tool
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ BUILTIN_TOOLS = [
     # [Strangler Fig Migration] 挂载 app.core 侧最新的业务工具
     update_patient_info_tool,       # 患者信息提取
     preview_appointment_tool,       # 挂号预览
+    show_medical_record_tool,       # 病历单展示
     schedule_appointment_tool,      # 挂号签发
     rag_retrieve_tool,              # 知识库检索 (RAGFlow Lite)
 ]

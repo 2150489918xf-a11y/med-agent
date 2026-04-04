@@ -20,7 +20,7 @@ export default function DoctorWorkspaceLayout({
 }) {
   return (
     // 强制使用 Light Mode 和米白偏灰底色 (bg-slate-50)，移除暗色依赖
-    <div className="light flex min-h-screen w-full flex-col bg-slate-50 text-slate-900 font-sans">
+    <div className="light flex w-full flex-col bg-slate-50 text-slate-900 font-sans h-screen overflow-hidden">
       {/* 顶部天际线导航栏 */}
       <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b border-slate-200 bg-white/80 px-4 backdrop-blur-md">
         <div className="flex items-center gap-3">

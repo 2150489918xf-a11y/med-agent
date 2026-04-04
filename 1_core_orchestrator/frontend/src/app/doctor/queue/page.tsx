@@ -19,6 +19,7 @@ import {
   X,
   Loader2,
   Paperclip,
+  Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "sonner";
 
 // ── Types ─────────────────────────────────────────────────
 interface PatientInfo {
@@ -45,6 +47,7 @@ interface EvidenceItem {
 
 interface CaseItem {
   case_id: string;
+  patient_thread_id: string;
   status: string;
   priority: string;
   patient_info: PatientInfo;
@@ -208,7 +211,7 @@ export default function DoctorQueuePage() {
         formData.append("files", file);
       }
       // Use the case's thread_id (patient_thread_id) for the uploads API
-      const threadId = (selectedCase as any).patient_thread_id || selectedCase.case_id;
+      const threadId = selectedCase.patient_thread_id || selectedCase.case_id;
       const res = await fetch(
         `${getBackendBaseURL()}/api/threads/${threadId}/uploads`,
         { method: "POST", body: formData }
@@ -245,12 +248,10 @@ export default function DoctorQueuePage() {
   const handleQuickCreateCase = async () => {
     setIsCreating(true);
     try {
-      const threadId = `doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       const res = await fetch(`${getBackendBaseURL()}/api/cases`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          patient_thread_id: threadId,
           priority: "medium",
           patient_info: {
             name: "新增病患",
@@ -267,18 +268,31 @@ export default function DoctorQueuePage() {
           body: JSON.stringify({ status: "in_review" })
         });
         
-        // 刷新列表并选中新建的病例
-        await loadCases();
-        const updatedCases = await fetch(`${getBackendBaseURL()}/api/cases`).then(r => r.json()).catch(() => []);
-        const newCase = updatedCases.find((c: any) => c.case_id === data.case_id);
-        if (newCase) {
-          setSelectedCase(newCase);
-        }
+        toast.success("病例创建成功，正在跳转填写页面...");
+        router.push(`/doctor/chat/${data.case_id}`);
       }
     } catch (err) {
       console.error("[QuickCreateCase] Failed:", err);
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  const handleDeleteCase = async (caseId: string) => {
+    if (!window.confirm("确定要永久删除此病例及所有相关数据吗？这是一项不可逆操作。")) return;
+    try {
+      const res = await fetch(`${getBackendBaseURL()}/api/cases/${caseId}`, { method: "DELETE" });
+      if (res.ok) {
+        if (selectedCase?.case_id === caseId) {
+          setSelectedCase(null);
+        }
+        await loadCases();
+      } else {
+        alert("删除失败，请稍后重试");
+      }
+    } catch (err) {
+      console.error("[DeleteCase] Failed:", err);
+      alert("删除失败，请检查网络连接");
     }
   };
 
@@ -471,8 +485,20 @@ export default function DoctorQueuePage() {
                   <p className="text-sm text-slate-500 mt-1">
                     Case ID: <span className="font-mono">{selectedCase.case_id}</span>
                   </p>
+                  <p className="text-xs text-slate-400 mt-0.5 font-mono">
+                    Thread (沙盒): {selectedCase.patient_thread_id}
+                  </p>
                 </div>
-                <div className="flex gap-3">
+                <div className="flex gap-3 items-center">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleDeleteCase(selectedCase.case_id)}
+                    className="text-slate-400 hover:text-red-600 hover:bg-red-50 mr-2"
+                    title="删除病例"
+                  >
+                    <Trash2 className="h-5 w-5" />
+                  </Button>
                   {selectedCase.status === "pending" && (
                     <Button
                       size="lg"

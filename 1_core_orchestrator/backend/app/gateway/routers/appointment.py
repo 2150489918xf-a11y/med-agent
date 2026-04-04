@@ -9,13 +9,15 @@
 """
 
 import json
-from loguru import logger
 from pathlib import Path
 
+from loguru import logger
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.core.config.paths import get_paths
+from deerflow.patient_record_context import build_patient_record_snapshot
 
 
 router = APIRouter(prefix="/api/threads/{thread_id}", tags=["appointment"])
@@ -236,9 +238,9 @@ async def confirm_appointment(thread_id: str, req: ConfirmAppointmentRequest):
             ocr_text = ocr_file.read_text(encoding="utf-8")
             case_db.add_evidence(new_case.case_id, AddEvidenceRequest(
                 evidence_id=lab_id,
-                type="lab_report",
+                type="lab",
                 title=f"化验单: {original}",
-                source="ocr",
+                source="patient_upload",
                 ai_analysis=ocr_text[:500] if ocr_text else None,
                 is_abnormal=False,
             ))
@@ -268,3 +270,65 @@ async def confirm_appointment(thread_id: str, req: ConfirmAppointmentRequest):
         evidence_count=evidence_count,
         message=f"挂号成功！就诊编号 {short_id}{dept_text}。已提交 {evidence_count} 份检查资料。",
     )
+
+# ── Medical Record Endpoints ──────────────────────────────
+
+@router.get("/medical-record")
+async def get_medical_record(thread_id: str) -> dict:
+    """Return current medical record data for the drawer view.
+
+    Reads sandbox-staged patient info and scanned evidence items,
+    same logic as the show_medical_record tool but via REST API.
+    """
+    snapshot = build_patient_record_snapshot(thread_id)
+
+    return {
+        "type": "medical_record",
+        "thread_id": thread_id,
+        "patient_info": snapshot["patient_info"],
+        "evidence_items": snapshot["evidence_items"],
+        "guidance": snapshot["guidance"],
+    }
+
+
+class PatchPatientIntakeRequest(BaseModel):
+    """Partial update to patient intake info."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+@router.patch("/patient-intake")
+async def patch_patient_intake(thread_id: str, req: PatchPatientIntakeRequest) -> dict:
+    """Merge-update the sandbox patient_intake.json file.
+
+    Used by the MedicalRecordCard edit form to save changes.
+    """
+    paths = get_paths()
+    sandbox_dir = paths.sandbox_user_data_dir(thread_id)
+    sandbox_dir.mkdir(parents=True, exist_ok=True)
+
+    intake_file = sandbox_dir / "patient_intake.json"
+
+    # Read existing
+    existing: dict = {}
+    if intake_file.exists():
+        try:
+            existing = json.loads(intake_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    # Merge update (only non-None fields from request)
+    update_data = req.model_dump(exclude_unset=True)
+    for k, v in update_data.items():
+        if v is not None and v != "":
+            existing[k] = v
+        elif v == "" or v is None:
+            existing.pop(k, None)
+
+    intake_file.write_text(
+        json.dumps(existing, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    logger.info(f"[PATIENT_INTAKE] Updated intake for thread {thread_id}: {list(update_data.keys())}")
+    return {"success": True, "patient_info": existing}

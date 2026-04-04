@@ -128,6 +128,12 @@ FastAPI application providing REST endpoints for frontend integration:
 | `DELETE /api/threads/{id}` | Delete DeerFlow-managed local thread data after LangGraph thread deletion; unexpected failures are logged server-side and return a generic 500 detail |
 | `GET /api/threads/{id}/artifacts/{path}` | Serve generated artifacts |
 
+Route-level regression coverage also includes `tests/test_cases_router.py`, which verifies `/api/cases/{case_id}/summary-readiness`, the HTTP 409 synthesis gate on `/api/cases/{case_id}/summary`, and that the diagnosis PUT route is only registered once.
+
+Pydantic migration coverage also includes `tests/test_appointment_router.py`, which verifies the patient-intake patch model keeps `extra="allow"` behavior without emitting the Pydantic v1 class-config deprecation warning, and that confirmed OCR lab evidence is normalized to the case-domain `lab` / `patient_upload` vocabulary before persistence.
+
+Dependency hygiene coverage also includes `tests/test_dependency_warnings.py`, which verifies importing `requests` does not emit `RequestsDependencyWarning` from an incompatible transitive `chardet` version.
+
 ### IM Channels
 
 The IM bridge supports Feishu, Slack, and Telegram. Slack and Telegram still use the final `runs.wait()` response path, while Feishu now streams through `runs.stream(["messages-tuple", "values"])` and updates a single in-thread card in place.
@@ -205,9 +211,14 @@ make dev
 
 # Terminal 2: Gateway API
 make gateway
+
+# Windows-safe direct command
+PYTHONPATH=. uv run python -m uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001
 ```
 
 Direct access: LangGraph at http://localhost:2024, Gateway at http://localhost:8001
+
+On Windows hosts with application control enabled, prefer the module form above. `make gateway` now uses `uv run python -m uvicorn ...` internally to avoid `uvicorn` console-script blocking.
 
 ---
 
@@ -321,7 +332,7 @@ MCP servers and skill states in a single file:
 ```bash
 make install    # Install dependencies
 make dev        # Run LangGraph server (port 2024)
-make gateway    # Run Gateway API (port 8001)
+make gateway    # Run Gateway API (port 8001, via python -m uvicorn)
 make lint       # Run linter (ruff)
 make format     # Format code (ruff)
 ```

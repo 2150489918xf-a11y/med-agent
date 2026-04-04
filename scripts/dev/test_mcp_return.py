@@ -1,7 +1,10 @@
 import asyncio
-import json
-import os
+from pathlib import Path
+
 from langchain_mcp_adapters.client import MultiServerMCPClient
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 async def test_mcp_return():
     # Attempt to connect to the running server on 8002
@@ -19,13 +22,13 @@ async def test_mcp_return():
         analyze_tool = next(t for t in tools if t.name == "analyze_xray")
         
         # We need a valid path that exists
-        test_path = "E:/Dev_Workspace/01_Projects/Special/med-agent/1_core_orchestrator/backend/.deer-flow/threads/9d5fc279-93b5-49e6-8eb8-3f86503eede1/user-data/uploads/屏幕截图 2026-03-24 165352.png"
+        test_path = REPO_ROOT / "1_core_orchestrator" / "backend" / ".deer-flow" / "threads" / "9d5fc279-93b5-49e6-8eb8-3f86503eede1" / "user-data" / "uploads" / "屏幕截图 2026-03-24 165352.png"
         
         print(f"Calling tool with path: {test_path}")
         # Note: We call the original underlying coroutine directly to see its raw return
         # result = await analyze_tool.coroutine(image_path=test_path)
         # Actually, let's use the tool object directly
-        result = await analyze_tool.ainvoke({"image_path": test_path})
+        result = await analyze_tool.ainvoke({"image_path": str(test_path)})
         
         print(f"Result Type: {type(result)}")
         print(f"Result Content: {result}")

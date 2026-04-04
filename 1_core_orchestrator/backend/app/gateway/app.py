@@ -19,6 +19,7 @@ from app.gateway.routers import (
     uploads,
     knowledge_proxy,
     brain_report,
+    tasks,
 )
 from app.core.config.app_config import get_app_config
 from app.core.logging.logger import setup_logging
@@ -186,6 +187,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     app.include_router(knowledge_proxy.router)
     app.include_router(appointment.router)
     app.include_router(brain_report.router)
+    app.include_router(tasks.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:

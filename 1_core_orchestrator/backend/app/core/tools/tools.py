@@ -10,6 +10,7 @@ from app.core.tools.builtins import ask_clarification_tool, present_file_tool
 from app.core.tools.builtins.update_patient_info import update_patient_info_tool
 from app.core.tools.builtins.preview_appointment import preview_appointment_tool
 from app.core.tools.builtins.schedule_appointment import schedule_appointment_tool
+from app.core.tools.builtins.show_medical_record import show_medical_record_tool
 from app.core.tools.builtins.rag_retrieve import rag_retrieve_tool
 from app.core.tools.builtins.tool_search import reset_deferred_registry
 
@@ -22,6 +23,7 @@ BUILTIN_TOOLS = [
     # 影像分析结果由上传管线 (uploads.py) 自动写入沙箱，不再需要 Agent 手动调用。
     update_patient_info_tool,       # 患者信息提取（仅写沙箱暂存）
     preview_appointment_tool,       # [ADR-021] 挂号预览（读沙箱 → 返回确认卡片数据）
+    show_medical_record_tool,       # 病历单展示（读沙箱 → 返回病历卡片数据）
     schedule_appointment_tool,      # [ADR-020] 挂号签发（降级兜底，前端渲染异常时使用）
     rag_retrieve_tool,              # [ADR-014] 知识库检索 (RAGFlow Lite)
 ]

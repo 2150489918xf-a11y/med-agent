@@ -78,7 +78,7 @@ class BrainTumorAnalyzer:
         )
 
         structured_data = {
-            "pipeline": "brain_nifti_v1_mcp",
+            "pipeline": "brain_nifti_v1",
             "mcp_status": "completed",
             "modality": "brain_mri_3d",
             "status": "pending_doctor_review",

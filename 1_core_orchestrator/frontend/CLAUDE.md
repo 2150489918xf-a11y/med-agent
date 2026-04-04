@@ -38,6 +38,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 - **`components/`** — React components split into:
   - `ui/` — Shadcn UI primitives (auto-generated, ESLint-ignored)
   - `ai-elements/` — Vercel AI SDK elements (auto-generated, ESLint-ignored)
+  - `doctor/` — doctor-side review panels including EvidenceDesk, imaging review, OCR, and lab viewers
   - `workspace/` — Chat page components (messages, artifacts, settings)
   - `landing/` — Landing page sections
 - **`core/`** — Business logic, the heart of the app:
@@ -77,6 +78,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 - **Class names**: Use `cn()` from `@/lib/utils` for conditional Tailwind classes.
 - **Path alias**: `@/*` maps to `src/*`.
 - **Components**: `ui/` and `ai-elements/` are generated from registries (Shadcn, MagicUI, React Bits, Vercel AI SDK) — don't manually edit these.
+- **Targeted validation**: for doctor-side cleanup work, run isolated ESLint commands like `pnpm exec eslint "src/components/doctor/**/*.tsx"` before relying on repo-wide lint output.
 
 ## Environment
 

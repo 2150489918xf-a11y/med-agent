@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback } from "react";
+import { ClipboardList, FileText } from "lucide-react";
 import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
 
 import { type PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
@@ -12,13 +13,13 @@ import {
 } from "@/components/workspace/chats";
 import { ExportTrigger } from "@/components/workspace/export-trigger";
 import { InputBox } from "@/components/workspace/input-box";
+import { MedicalRecordDialog } from "@/components/workspace/MedicalRecordDrawer";
 import { MessageList } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
 import { ThreadTitle } from "@/components/workspace/thread-title";
 import { TodoList } from "@/components/workspace/todo-list";
 import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicator";
 import { Welcome } from "@/components/workspace/welcome";
-import { ClipboardList } from "lucide-react";
 import { useI18n } from "@/core/i18n/hooks";
 import { useNotification } from "@/core/notification/hooks";
 import { useLocalSettings } from "@/core/settings";
@@ -75,6 +76,29 @@ export default function ChatPage() {
 
   // [Phase7] handleReJudge 已移至医生端 Dashboard
 
+  const [medicalRecordOpen, setMedicalRecordOpen] = useState(false);
+
+  useEffect(() => {
+    const handleOpenMedicalRecord = (event: Event) => {
+      const customEvent = event as CustomEvent<{ threadId?: string }>;
+      if (customEvent.detail?.threadId && customEvent.detail.threadId !== threadId) {
+        return;
+      }
+      setMedicalRecordOpen(true);
+    };
+
+    window.addEventListener(
+      "medical-record:open",
+      handleOpenMedicalRecord as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        "medical-record:open",
+        handleOpenMedicalRecord as EventListener,
+      );
+    };
+  }, [threadId]);
+
   return (
     <ThreadContext.Provider value={{ thread, isMock }}>
       <ChatBox threadId={threadId}>
@@ -91,6 +115,14 @@ export default function ChatPage() {
               <ThreadTitle threadId={threadId} thread={thread} />
             </div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setMedicalRecordOpen(true)}
+                className="flex min-h-9 min-w-[84px] items-center gap-1.5 whitespace-nowrap rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-semibold text-cyan-800 transition-colors hover:border-cyan-300 hover:bg-cyan-100"
+                title="打开病例页面"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                病历单
+              </button>
               <Link
                 href={`/workspace/status?thread_id=${threadId}`}
                 className="p-1.5 rounded-md text-slate-400 hover:bg-slate-100 hover:text-blue-600 transition-colors"
@@ -162,6 +194,11 @@ export default function ChatPage() {
             </div>
           </main>
         </div>
+        <MedicalRecordDialog
+          threadId={threadId}
+          open={medicalRecordOpen}
+          onClose={() => setMedicalRecordOpen(false)}
+        />
       </ChatBox>
     </ThreadContext.Provider>
   );

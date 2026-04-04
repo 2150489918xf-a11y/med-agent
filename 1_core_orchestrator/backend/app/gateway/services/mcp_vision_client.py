@@ -12,6 +12,15 @@ from loguru import logger
 
 MCP_VISION_URL = os.getenv("MCP_VISION_URL", "http://127.0.0.1:8002/sse")
 
+# [CRITICAL FIX] 绕过系统级代理（Clash/V2ray 等），防止本地回环请求被网关拦截导致 502 Bad Gateway
+if "127.0.0.1" in MCP_VISION_URL or "localhost" in MCP_VISION_URL:
+    existing_no_proxy = os.environ.get("NO_PROXY", "")
+    new_no_proxy = "127.0.0.1,localhost"
+    if existing_no_proxy:
+        os.environ["NO_PROXY"] = f"{new_no_proxy},{existing_no_proxy}"
+    else:
+        os.environ["NO_PROXY"] = new_no_proxy
+
 async def analyze_xray(image_path: str, enable_sam: bool = False) -> dict:
     """Invokes the standalone MCP Vision service to analyze a chest X-ray.
     

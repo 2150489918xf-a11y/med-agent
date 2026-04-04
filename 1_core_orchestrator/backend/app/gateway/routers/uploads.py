@@ -7,7 +7,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, BackgroundTasks
 from pydantic import BaseModel
 
 from app.core.config.app_config import get_app_config
@@ -30,7 +30,6 @@ from app.gateway.services.parallel_analyzer import analyze_batch
 
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
-NIFTI_EXTS = {".nii"}
 
 # 文件类型 → Evidence 类型映射（非图像文件根据扩展名推断）
 _DOC_EXTS = {".pdf", ".doc", ".docx", ".txt", ".md", ".csv", ".xls", ".xlsx"}
@@ -43,10 +42,12 @@ class UploadResponse(BaseModel):
     success: bool
     files: list[dict[str, str]]
     message: str
+    task_ids: list[str] = []
 
 @router.post("", response_model=UploadResponse)
 async def upload_files(
     thread_id: str,
+    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
 ) -> UploadResponse:
     """Upload multiple files to a thread's uploads directory."""
@@ -141,34 +142,59 @@ async def upload_files(
                     f["image_confidence"] = str(res.confidence)
                     if res.enhanced_file_path:
                         f["enhanced_path"] = res.enhanced_file_path
+                    # [Plan E] 将 OCR Markdown 结果直接返回给前端
+                    if res.ai_analysis_text:
+                        f["ai_analysis_text"] = res.ai_analysis_text
                     # For legacy compatibility in response structure
                     if res.structured_data and res.structured_data.get("mcp_status") == "completed":
                          f["mcp_analysis_status"] = "completed"
                          f["mcp_findings_count"] = str(res.structured_data.get("findings_count", 0))
 
     # [Gap①] 自动将上传结果回写到 Case 的 evidence 数组
+    evidence_mapping = {}
     try:
-        await _auto_sync_evidence(thread_id, uploaded_files, analysis_results)
+        evidence_mapping = await _auto_sync_evidence(thread_id, uploaded_files, analysis_results)
     except Exception as sync_err:
         logger.warning(f"[Gap①] Evidence auto-sync failed (non-blocking): {sync_err}")
+
+    # -------- 异步队列调度 --------
+    task_ids = []
+    for f in uploaded_files:
+        filename = f.get("filename", "")
+        if filename.endswith(".nii.gz") or filename.endswith(".nii"):
+            from app.gateway.services.task_store import create_task
+            from app.gateway.services.brain_nifti_pipeline import process_nifti_pipeline_async
+            
+            task_id = str(uuid.uuid4())
+            create_task(task_id)
+            task_ids.append(task_id)
+            
+            nifti_path = str(uploads_dir / filename)
+            
+            # [ADR-036 v2] 精确路由
+            ev_id = evidence_mapping.get(filename)
+            background_tasks.add_task(process_nifti_pipeline_async, task_id, nifti_path, thread_id, filename, ev_id)
+            logger.info(f"Dispatching async task {task_id} for NIfTI file {filename} to ev_id {ev_id}")
 
     return UploadResponse(
         success=True,
         files=uploaded_files,
         message=f"Successfully uploaded {len(uploaded_files)} file(s)",
+        task_ids=task_ids,
     )
 
-async def _auto_sync_evidence(thread_id: str, uploaded_files: list[dict], analysis_results: list[AnalysisResult]) -> None:
-    """[Gap①] 上传完成后，自动将分析结果回写到 Case 的 evidence 数组。"""
+async def _auto_sync_evidence(thread_id: str, uploaded_files: list[dict], analysis_results: list[AnalysisResult]) -> dict[str, str]:
+    """[Gap①] 上传完成后，自动将分析结果回写到 Case 的 evidence 数组，并返回字典 mapping filename -> evidence_id。"""
     from app.gateway.services.case_db import get_case_by_thread, add_evidence
     from app.gateway.models.case import AddEvidenceRequest
 
     case = get_case_by_thread(thread_id)
     if not case:
         logger.debug(f"[Gap①] No case for thread {thread_id}, skipping evidence sync")
-        return
+        return {}
 
     result_map = {r.filename: r for r in analysis_results if not r.error}
+    evidence_mapping: dict[str, str] = {}
 
     for f in uploaded_files:
         filename = f.get("filename", "")
@@ -204,6 +230,8 @@ async def _auto_sync_evidence(thread_id: str, uploaded_files: list[dict], analys
             elif _detect_nifti(filename):
                 ev_type = "imaging"
                 evidence_title = "脑部核磁共振 (MRI NIfTI)"
+                # [ADR-036] 写入占位 structured_data，使前端立刻渲染 BrainSpatialReview 的加载态
+                structured = {"pipeline": "brain_nifti_v1", "status": "processing"}
             elif file_ext in _DOC_EXTS:
                 ev_type = "note"
                 evidence_title = filename
@@ -233,9 +261,14 @@ async def _auto_sync_evidence(thread_id: str, uploaded_files: list[dict], analys
                 "structured_data": structured,
                 "is_abnormal": bool(is_abnormal),
             })
+            evidence_mapping[filename] = existing_ev.evidence_id
             logger.info(f"[Gap①] Updated existing evidence: {filename} → {ev_type} for case {case.case_id}")
         else:
+            # We generate our own ev ID here or use the newly generated one from add_evidence. 
+            # To be safe and deterministic, let's inject a new one.
+            new_ev_id = uuid.uuid4().hex[:12]
             req = AddEvidenceRequest(
+                evidence_id=new_ev_id,
                 type=ev_type,
                 title=evidence_title,
                 source="patient_upload",
@@ -245,7 +278,10 @@ async def _auto_sync_evidence(thread_id: str, uploaded_files: list[dict], analys
                 is_abnormal=bool(is_abnormal),
             )
             add_evidence(case.case_id, req)
+            evidence_mapping[filename] = new_ev_id
             logger.info(f"[Gap①] Auto-synced evidence: {filename} → {ev_type} for case {case.case_id}")
+
+    return evidence_mapping
 
 @router.get("/list", response_model=dict)
 async def list_uploaded_files(thread_id: str) -> dict:

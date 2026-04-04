@@ -48,12 +48,38 @@ async def run_pipeline(nifti_dir: str, original_filename: str) -> dict:
                 t1ce_path = found_t1ce
             
     # Step 1: nnU-Net 3D 分割
+    import time
+    step1_start = time.time()
     tumor_mask, is_mask_mock = await asyncio.to_thread(step1_segment, dir_path)
+    
+    # --- 优雅降级 (Graceful Degradation) ---
+    img = nib.load(t1ce_path) if t1ce_path and os.path.exists(t1ce_path) else None
+    clinical_warning = None
+    
+    if img:
+        spacing = img.header.get_zooms()[:3]
+        voxel_vol = spacing[0] * spacing[1] * spacing[2]
+        total_volume_cm3 = float(np.sum(tumor_mask > 0) * voxel_vol / 1000)
+        
+        logger.info("brain_pipeline_step_completed", extra={
+            "step": "step1_nnunet",
+            "duration_ms": int((time.time() - step1_start) * 1000),
+            "wt_volume_cm3": total_volume_cm3
+        })
+        
+        if total_volume_cm3 < 0.5:
+            logger.info("brain_pipeline_warning", extra={"reason": "volume_too_small", "vol": total_volume_cm3})
+            clinical_warning = "体积极小异常 (总体积 < 0.5 cm³)，系统将尝试定位并绘制 2D 贴图。有假阳性噪点或早期微小占位可能，请医师严审图谱辅助诊断！"
 
     # Step 2: 空间计算
     is_spatial_mock = False
+    step2_start = time.time()
     try:
         spatial_info = await asyncio.to_thread(step2_localize, t1ce_path, t1_path, tumor_mask)
+        logger.info("brain_pipeline_step_completed", extra={
+            "step": "step2_localize",
+            "duration_ms": int((time.time() - step2_start) * 1000)
+        })
     except Exception as e:
         logger.error(f"Error in spatial localization: {e}")
         is_spatial_mock = True
@@ -63,6 +89,9 @@ async def run_pipeline(nifti_dir: str, original_filename: str) -> dict:
         # Detected mock string
         is_spatial_mock = True
         
+    if 'clinical_warning' in locals() and clinical_warning:
+        spatial_info["clinical_warning"] = clinical_warning
+
     spatial_info["is_mock_fallback"] = is_mask_mock or is_spatial_mock
 
     # Step 3: 2D 渲染

@@ -87,7 +87,7 @@ make stop       # Stop all services
 ```bash
 make install    # Install backend dependencies
 make dev        # Run LangGraph server only (port 2024)
-make gateway    # Run Gateway API only (port 8001)
+make gateway    # Run Gateway API only (port 8001, via python -m uvicorn)
 make test       # Run all backend tests
 make lint       # Lint with ruff
 make format     # Format code with ruff
@@ -96,6 +96,10 @@ make format     # Format code with ruff
 Regression tests related to Docker/provisioner behavior:
 - `tests/test_docker_sandbox_mode_detection.py` (mode detection from `config.yaml`)
 - `tests/test_provisioner_kubeconfig.py` (kubeconfig file/directory handling)
+- `tests/test_cases_router.py` (summary-readiness projection, HTTP 409 synthesis gate, and diagnosis route uniqueness coverage)
+- `tests/test_appointment_router.py` (Pydantic v2 patient-intake patch model config regression coverage plus lab OCR evidence normalization coverage)
+- `tests/test_dependency_warnings.py` (requests import warning regression coverage for transitive dependency compatibility)
+- `tests/test_gateway_start_commands.py` (host-side gateway startup scripts must use `uv run python -m uvicorn ...` to avoid Windows console-entrypoint blocking)
 
 Boundary check (harness → app import firewall):
 - `tests/test_harness_boundary.py` — ensures `packages/harness/deerflow/` never imports from `app.*`

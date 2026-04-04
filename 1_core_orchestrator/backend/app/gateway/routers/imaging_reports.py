@@ -207,11 +207,13 @@ async def stateless_analyze_cv(thread_id: str, payload: AnalyzeCVRequest | None 
     # Check if a report already exists for this image (from parallel analyzer)
     image_filename = Path(local_image_path).name
     if reports_dir.exists():
+        import urllib.parse
         for report_file in reports_dir.glob("*.json"):
             try:
                 report_data = json.loads(report_file.read_text(encoding="utf-8"))
                 db_image_path = report_data.get("image_path", "")
-                if db_image_path and Path(db_image_path).name == image_filename:
+                decoded_db_image_path = urllib.parse.unquote(db_image_path)
+                if db_image_path and Path(decoded_db_image_path).name == image_filename:
                     logger.info(f"[HITL] Using existing report found for {image_filename}")
                     
                     # Ensure it's synced to DB
@@ -232,9 +234,44 @@ async def stateless_analyze_cv(thread_id: str, payload: AnalyzeCVRequest | None 
     try:
         ai_result_raw = await analyze_xray(local_image_path, enable_sam=enable_sam)
         
+        # [CRITICAL FIX] Convert MCP format to frontend schema
+        findings = ai_result_raw.get("findings", [])
+        colors = ["red", "amber", "purple", "teal"]
+        try:
+            from PIL import Image
+            with Image.open(local_image_path) as img:
+                img_w, img_h = img.size
+            for i, f in enumerate(findings):
+                # 1. Map bounding box [x1, y1, x2, y2] to {x, y, width, height} percentage
+                if "bbox" in f and isinstance(f["bbox"], list) and len(f["bbox"]) == 4:
+                    x1, y1, x2, y2 = f["bbox"]
+                    f["bbox"] = {
+                        "x": (x1 / img_w) * 100 if img_w else 0,
+                        "y": (y1 / img_h) * 100 if img_h else 0,
+                        "width": ((x2 - x1) / img_w) * 100 if img_w else 0,
+                        "height": ((y2 - y1) / img_h) * 100 if img_h else 0
+                    }
+                
+                # 2. Map 'disease' to 'name' (Required by UI)
+                if "disease" in f and "name" not in f:
+                    f["name"] = f["disease"]
+                    
+                # 3. Map 'confidence' 0..1 to 0..100 (UI expects percentage format)
+                if "confidence" in f and f["confidence"] <= 1.0:
+                    f["confidence"] = f["confidence"] * 100
+                    
+                # 4. Inject required frontend properties for rendering and logic
+                f["source"] = "ai"
+                f["modified"] = False
+                f["color"] = colors[i % len(colors)]
+                f["note"] = f.get("location_cn", "") or f.get("location", "")
+                
+        except Exception as e:
+            logger.warning(f"Failed to normalize findings format: {e}")
+
         # Format to our system's expected ai_result structure
         formatted_ai_result = {
-            "findings": ai_result_raw.get("findings", []),
+            "findings": findings,
             "densenet_probs": ai_result_raw.get("summary", {}).get("disease_probabilities", {})
         }
     except Exception as e:
@@ -254,8 +291,23 @@ async def stateless_analyze_cv(thread_id: str, payload: AnalyzeCVRequest | None 
     
     report_file = reports_dir / f"{report_id}.json"
     report_file.write_text(json.dumps(generated_data, ensure_ascii=False, indent=2), encoding="utf-8")
-    
     logger.info(f"[HITL] Analysis complete. Saved to {report_file.name}")
+
+    # 4. Sync the structured data to the case evidence database
+    try:
+        from app.gateway.services.case_db import get_case_by_thread, update_evidence_data
+        case = get_case_by_thread(thread_id)
+        if case:
+            for item in case.evidence:
+                # Match by exact URL or filename
+                if item.file_path == image_url or (item.file_path and Path(urllib.parse.unquote(item.file_path)).name == image_filename):
+                    update_evidence_data(case.case_id, item.evidence_id, {
+                        "structured_data": generated_data
+                    })
+                    break
+    except Exception as e:
+        logger.error(f"[HITL] Failed to sync generated report to case DB: {e}")
+
     return {"status": "ok", "report_id": report_id, "data": generated_data}
 
 @router.post("/generate-draft")
